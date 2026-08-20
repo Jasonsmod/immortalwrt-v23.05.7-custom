@@ -47,7 +47,7 @@ jobs:
 
       - name: 恢复构建脚本执行权限
         run: |
-          find scripts -type f -print0 | while IFS= read -r -d '' script; do
+          find . -path './.git' -prune -o -type f -print0 | while IFS= read -r -d '' script; do
             if head -n 1 "$script" | grep -q '^#!'; then
               chmod +x "$script"
             fi
