@@ -1,0 +1,144 @@
+name: 编译 ImmortalWrt 23.05.7
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 选择固件目标
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - r619ac
+          - x86
+          - x86_64
+      ssh:
+        description: 编译前启用仅发起者可访问的 SSH 调试
+        required: false
+        default: false
+        type: boolean
+      upload_release:
+        description: 同时发布到 GitHub Release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: immortalwrt-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 编译 ${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.target == 'all' && '["r619ac","x86","x86_64"]' || format('["{0}"]', inputs.target)) }}
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装编译依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang cmake cpio curl \
+            device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gperf haveged help2man intltool libelf-dev \
+            libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev \
+            libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool \
+            libyaml-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip-full \
+            patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-pyelftools qemu-utils re2c rsync scons squashfs-tools \
+            subversion swig texinfo uglifyjs upx-ucl unzip wget xmlto xxd zlib1g-dev
+
+      - name: 恢复源码符号链接
+        run: bash scripts/custom/restore-symlinks.sh
+
+      - name: 缓存下载和编译缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            dl
+            .ccache
+          key: immortalwrt-23.05.7-${{ matrix.target }}-${{ hashFiles('feeds.conf.default', 'configs/**', 'scripts/custom/**') }}
+          restore-keys: |
+            immortalwrt-23.05.7-${{ matrix.target }}-
+
+      - name: 更新并安装官方 Feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 同步第三方源码
+        run: bash scripts/custom/prepare-packages.sh
+
+      - name: 应用源码级定制
+        run: bash scripts/custom/configure-source.sh
+
+      - name: 检查重复软件包定义
+        run: bash scripts/custom/check-package-conflicts.sh
+
+      - name: 生成并验证目标配置
+        run: |
+          bash scripts/custom/select-config.sh "${{ matrix.target }}"
+          bash scripts/custom/verify-config.sh "${{ matrix.target }}"
+
+      - name: SSH 调试
+        if: ${{ inputs.ssh }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+
+      - name: 下载软件包源码
+        run: make download -j8
+
+      - name: 编译固件
+        run: |
+          make -j"$(nproc)" || make -j1 V=s
+
+      - name: 整理构建信息
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "artifacts/${{ matrix.target }}"
+          cp .config "artifacts/${{ matrix.target }}/config.buildinfo"
+          cp scripts/custom/package-sources.sh "artifacts/${{ matrix.target }}/package-sources.sh"
+          if [ -d bin/targets ]; then
+            cp -a bin/targets/. "artifacts/${{ matrix.target }}/"
+          fi
+
+      - name: 上传构建产物
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-23.05.7-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}
+          include-hidden-files: true
+          if-no-files-found: error
+
+  release:
+    name: 发布固件
+    if: ${{ inputs.upload_release }}
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: immortalwrt-v23.05.7-${{ github.run_number }}
+          name: ImmortalWrt v23.05.7 build ${{ github.run_number }}
+          generate_release_notes: true
+          files: artifacts/**/*
