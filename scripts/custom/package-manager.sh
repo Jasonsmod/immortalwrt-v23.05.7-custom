@@ -83,7 +83,7 @@ UPDATE_PACKAGE() {
 
 	for excluded in $excludes; do
 		validate_name "$excluded"
-		find "$source_dir" -type d -name "$excluded" -prune -exec rm -rf -- {} \;
+		find "$source_dir" -mindepth 1 -type d -name "$excluded" -prune -exec rm -rf -- {} \;
 	done
 
 	# 不把第三方仓库的 Git 元数据嵌套进当前源码仓库。
