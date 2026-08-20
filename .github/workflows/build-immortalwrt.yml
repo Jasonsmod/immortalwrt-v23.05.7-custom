@@ -106,7 +106,7 @@ jobs:
           make -j"$(nproc)" || make -j1 V=s
 
       - name: 整理构建信息
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: |
           mkdir -p "artifacts/${{ matrix.target }}"
           cp .config "artifacts/${{ matrix.target }}/config.buildinfo"
@@ -116,7 +116,7 @@ jobs:
           fi
 
       - name: 上传构建产物
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
           name: immortalwrt-23.05.7-${{ matrix.target }}
