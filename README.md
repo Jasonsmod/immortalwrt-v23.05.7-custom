@@ -108,6 +108,8 @@ make -j"$(nproc)" || make -j1 V=s
 
 `[2026-08-21] 类型：修复 | 模块：项目仓库链接 | 内容：将 README 克隆地址更新为 jasonsmod/immortalwrt-v23.05.7-custom`
 
+`[2026-08-21] 类型：修复 | 模块：项目仓库链接 | 内容：将 GitHub 仓库地址统一为 Jasonsmod 的规范大小写`
+
 ## Download
 Built firmware images are available for many architectures and come with a package selection to be used as WiFi home router. To quickly find a factory image usable to migrate from a vendor stock firmware to ImmortalWrt, try the *Firmware Selector*.
 
@@ -155,7 +157,7 @@ To build your own firmware you need a GNU/Linux, BSD or MacOSX system (case sens
   - For more details, please see [Build system setup](https://openwrt.org/docs/guide-developer/build-system/install-buildsystem) documentation.
 
   ### Quickstart
-  1. Run `git clone -b <branch> --single-branch --filter=blob:none https://github.com/jasonsmod/immortalwrt-v23.05.7-custom.git` to clone this custom source repository.
+  1. Run `git clone -b <branch> --single-branch --filter=blob:none https://github.com/Jasonsmod/immortalwrt-v23.05.7-custom.git` to clone this custom source repository.
   2. Run `cd immortalwrt` to enter source directory.
   3. Run `./scripts/feeds update -a` to obtain all the latest package definitions defined in feeds.conf / feeds.conf.default
   4. Run `./scripts/feeds install -a` to install symlinks for all obtained packages into package/feeds/
