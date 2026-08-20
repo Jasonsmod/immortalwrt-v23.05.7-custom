@@ -11,14 +11,13 @@ LUCI_COLLECTION="$TOPDIR/feeds/luci/collections/luci/Makefile"
 	exit 1
 }
 
-# 保留 LuCI 完整集合，但将其默认 Bootstrap 依赖替换为 Argon。
+# 旧版 LuCI 集合会声明 Bootstrap 默认主题；新版集合将主题选择交给目标配置。
 if grep -q '+luci-theme-bootstrap' "$LUCI_COLLECTION"; then
 	sed -i 's/+luci-theme-bootstrap/+luci-theme-argon/g' "$LUCI_COLLECTION"
 fi
 
-grep -q '+luci-theme-argon' "$LUCI_COLLECTION" || {
-	printf '错误：无法将 LuCI 默认主题切换为 Argon。\n' >&2
-	exit 1
-}
-
-printf 'LuCI 默认主题依赖已切换为 Argon。\n'
+if grep -q '+luci-theme-argon' "$LUCI_COLLECTION"; then
+	printf 'LuCI 默认主题依赖已切换为 Argon。\n'
+else
+	printf 'LuCI 集合未声明主题依赖，将由目标配置直接选择 Argon。\n'
+fi
