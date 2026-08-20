@@ -75,8 +75,8 @@ jobs:
 
       - name: 更新并安装官方 Feeds
         run: |
-          bash ./scripts/feeds update -a
-          bash ./scripts/feeds install -a
+          perl ./scripts/feeds update -a
+          perl ./scripts/feeds install -a
 
       - name: 同步第三方源码
         run: bash scripts/custom/prepare-packages.sh
