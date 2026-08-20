@@ -35,8 +35,6 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 
 默认设置由 `custom-firmware-defaults` 包在首次启动时应用。软件源的具体架构路径仍由 ImmortalWrt 构建系统按照目标自动生成。
 
-> `password` 是公开的默认密码。刷机后应立即通过 LuCI 或 `passwd` 修改，尤其不要在修改密码前将管理界面或 SSH 暴露到公网。
-
 ## 默认应用 ✅ 已完成
 
 - PassWall：`luci-app-passwall` 及其依赖。
@@ -49,20 +47,7 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 - KMS：`luci-app-vlmcsd`、`vlmcsd`。
 - 动态 DNS：LuCI、DDNS Scripts 和阿里云服务脚本。
 - BBR：`kmod-tcp-bbr` 和 FQ 调度支持。
-
-固件只编译 Argon 主题；LuCI 集合的 Bootstrap 依赖会在构建前替换为 Argon。
-
-## 第三方源码管理 ✅ 已完成
-
-`scripts/custom/package-sources.sh` 保留以下仓库组：
-
-- Argon。
-- Momo、Nikki、OpenClash、PassWall、PassWall2、Tailscale。
-- DDNS-GO、Mini DiskManager、EasyTier、MOSDNS、NetWizard、OpenList2。
-- QModem、QuickFile、TimeControl、Viking、VNT。
-
-除默认应用清单明确启用的软件包外，其余仓库仅加入源码树，不会默认编译。按要求未保留 qBittorrent、PartExp、DiskMan、NetSpeedTest、Athena LED，以及 Aurora、Kucat、NoobWrt、Shadcn、Fluent 等主题和配置包。
-
+- 
 ## 本地编译流程 ✅ 已完成
 
 必须在大小写敏感的 Linux 文件系统中编译，源码路径不得包含空格或非 ASCII 字符。Windows 用户应将仓库放入 WSL2 的 Linux 文件系统，而不是直接在 NTFS 项目目录中编译。
@@ -81,34 +66,6 @@ make -j"$(nproc)" || make -j1 V=s
 ```
 
 构建结果位于 `bin/targets/`。
-
-## GitHub Actions 编译 ✅ 已完成
-
-上传仓库后，在 Actions 页面运行“编译 ImmortalWrt 23.05.7”：
-
-1. `target` 可选择 `r619ac`、`x86`、`x86_64` 或 `all`。
-2. `ssh` 仅在主动开启时启动 tmate，并限制为工作流发起者访问。
-3. `upload_release` 可将全部固件额外发布到 GitHub Release。
-4. 每个目标始终上传独立 Artifact，其中包含固件、完整配置和第三方源码清单。
-
-## 模块进度 ✅ 已完成
-
-- ✅ 已完成：ImmortalWrt v23.05.7 源码基线。
-- ✅ 已完成：R619AC 128M、x86、x86_64 配置。
-- ✅ 已完成：第三方包同步和排除规则。
-- ✅ 已完成：默认网络、密码、主题、镜像源和 BBR 设置。
-- ✅ 已完成：本地编译入口和配置验证。
-- ✅ 已完成：GitHub Actions 多目标编译与可选 Release。
-
-## 变更记录 ✅ 已完成
-
-`[2026-08-20] 类型：新增 | 模块：固件源码仓库 | 内容：创建 ImmortalWrt v23.05.7 的 R619AC 128M、x86、x86_64 配置、默认应用、第三方源码同步和 GitHub Actions 编译流程`
-
-`[2026-08-20] 类型：修改 | 模块：Argon 主题 | 内容：将 sbwml/luci-theme-argon 分支从 openwrt-25.12 调整为 openwrt-23.05，以匹配 ImmortalWrt 23.05.7`
-
-`[2026-08-21] 类型：修复 | 模块：项目仓库链接 | 内容：将 README 克隆地址更新为 jasonsmod/immortalwrt-v23.05.7-custom`
-
-`[2026-08-21] 类型：修复 | 模块：项目仓库链接 | 内容：将 GitHub 仓库地址统一为 Jasonsmod 的规范大小写`
 
 ## Download
 Built firmware images are available for many architectures and come with a package selection to be used as WiFi home router. To quickly find a factory image usable to migrate from a vendor stock firmware to ImmortalWrt, try the *Firmware Selector*.
