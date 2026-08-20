@@ -75,8 +75,8 @@ jobs:
 
       - name: 更新并安装官方 Feeds
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          bash ./scripts/feeds update -a
+          bash ./scripts/feeds install -a
 
       - name: 同步第三方源码
         run: bash scripts/custom/prepare-packages.sh
@@ -108,6 +108,10 @@ jobs:
       - name: 整理构建信息
         if: ${{ success() }}
         run: |
+          if [ ! -f .config ]; then
+            echo "未生成 .config，跳过构建信息整理。"
+            exit 0
+          fi
           mkdir -p "artifacts/${{ matrix.target }}"
           cp .config "artifacts/${{ matrix.target }}/config.buildinfo"
           cp scripts/custom/package-sources.sh "artifacts/${{ matrix.target }}/package-sources.sh"
@@ -116,7 +120,7 @@ jobs:
           fi
 
       - name: 上传构建产物
-        if: ${{ success() }}
+        if: ${{ success() && hashFiles('artifacts/**') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: immortalwrt-23.05.7-${{ matrix.target }}
