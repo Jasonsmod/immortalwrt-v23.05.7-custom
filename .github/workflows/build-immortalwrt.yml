@@ -115,6 +115,10 @@ jobs:
         run: |
           make -j"$(nproc)" || make -j1 V=s
 
+      - name: 验证 R619AC 刷机镜像
+        if: ${{ matrix.target == 'r619ac' }}
+        run: bash scripts/custom/verify-r619ac-images.sh
+
       - name: 整理构建信息
         if: ${{ success() }}
         run: |

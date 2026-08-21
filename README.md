@@ -163,3 +163,5 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
 [2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：x86 和 x86_64 仅保留 squashfs-combined 镜像、sha256sums 与 version.buildinfo。
 
 [2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：R619AC 仅保留 factory.ubi、sysupgrade.bin、sha256sums 与 version.buildinfo。
+
+[2026-08-21] 修复 | 模块：MOSDNS 与 R619AC | 内容：修复 MOSDNS LuCI 页面资源被误删的问题，并增加 R619AC 刷机镜像结构和设备元数据校验。
