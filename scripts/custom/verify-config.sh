@@ -51,7 +51,9 @@ for symbol in \
 	CONFIG_PACKAGE_luci-app-vlmcsd \
 	CONFIG_PACKAGE_luci-app-ddns \
 	CONFIG_PACKAGE_ddns-scripts-aliyun \
-	CONFIG_PACKAGE_kmod-tcp-bbr
+	CONFIG_PACKAGE_kmod-tcp-bbr \
+	CONFIG_PREINITOPT \
+	CONFIG_TARGET_DEFAULT_LAN_IP_FROM_PREINIT
 do
 	require_symbol "$symbol"
 done
