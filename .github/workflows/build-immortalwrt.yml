@@ -159,11 +159,19 @@ jobs:
             artifact_dir="$(printf '%s' "$file" | sed 's#^artifacts/##; s#/.*##')"
             target="${artifact_dir#immortalwrt-23.05.7-}"
             name="$(basename "$file")"
-            case "$name" in
-              *.bin|*.img|*.img.gz|*.itb|*.trx|*.ubi|*.squashfs*|*.tar.gz|*.vdi|*.vmdk|*.qcow2|sha256sums|*.manifest|*.json)
-                cp "$file" "release-assets/${target}-${name}"
-                ;;
-            esac
+            if [ "$target" = "x86" ] || [ "$target" = "x86_64" ]; then
+              case "$name" in
+                *squashfs-combined.img|*squashfs-combined.img.gz|*squashfs-combined-efi.img.gz|sha256sums|version.buildinfo|*.version.buildinfo)
+                  cp "$file" "release-assets/${target}-${name}"
+                  ;;
+              esac
+            else
+              case "$name" in
+                *.bin|*.img|*.img.gz|*.itb|*.trx|*.ubi|*.squashfs*|*.tar.gz|*.vdi|*.vmdk|*.qcow2|sha256sums|*.manifest|*.json)
+                  cp "$file" "release-assets/${target}-${name}"
+                  ;;
+              esac
+            fi
           done
           test -n "$(find release-assets -type f -print -quit)"
 
