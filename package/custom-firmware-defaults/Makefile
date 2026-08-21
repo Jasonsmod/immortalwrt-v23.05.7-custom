@@ -17,8 +17,10 @@ define Package/custom-firmware-defaults
 endef
 
 define Package/custom-firmware-defaults/description
- Applies the requested LAN address, root password, Argon theme and package mirror.
+ Applies the requested root password, Argon theme and package mirror.
 endef
+
+Build/Compile =
 
 define Package/custom-firmware-defaults/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
