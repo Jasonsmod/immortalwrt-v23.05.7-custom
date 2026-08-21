@@ -51,9 +51,7 @@ for symbol in \
 	CONFIG_PACKAGE_luci-app-vlmcsd \
 	CONFIG_PACKAGE_luci-app-ddns \
 	CONFIG_PACKAGE_ddns-scripts-aliyun \
-	CONFIG_PACKAGE_kmod-tcp-bbr \
-	CONFIG_PREINITOPT \
-	CONFIG_TARGET_DEFAULT_LAN_IP_FROM_PREINIT
+	CONFIG_PACKAGE_kmod-tcp-bbr
 do
 	require_symbol "$symbol"
 done
@@ -74,8 +72,9 @@ do
 	reject_symbol "$symbol"
 done
 
-if ! grep -qx 'CONFIG_TARGET_PREINIT_IP="192.168.50.1"' "$CONFIG"; then
-	printf '错误：默认管理地址不是 192.168.50.1。\n' >&2
+DEFAULTS_SCRIPT="$TOPDIR/package/custom-firmware-defaults/files/etc/uci-defaults/99-custom-firmware"
+if [ ! -f "$DEFAULTS_SCRIPT" ] || ! grep -Fqx "set network.lan.ipaddr='192.168.50.1'" "$DEFAULTS_SCRIPT"; then
+	printf '错误：默认管理地址未设置为 192.168.50.1。\n' >&2
 	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
 fi
 
