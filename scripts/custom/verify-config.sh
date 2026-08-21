@@ -72,8 +72,8 @@ do
 	reject_symbol "$symbol"
 done
 
-DEFAULTS_SCRIPT="$TOPDIR/package/custom-firmware-defaults/files/etc/uci-defaults/99-custom-firmware"
-if [ ! -f "$DEFAULTS_SCRIPT" ] || ! grep -Fqx "set network.lan.ipaddr='192.168.50.1'" "$DEFAULTS_SCRIPT"; then
+CONFIG_GENERATE="$TOPDIR/package/base-files/files/bin/config_generate"
+if [ ! -f "$CONFIG_GENERATE" ] || ! grep -Fqx 'lan) ipad=${ipaddr:-"192.168.50.1"} ;;' "$CONFIG_GENERATE"; then
 	printf '错误：默认管理地址未设置为 192.168.50.1。\n' >&2
 	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
 fi
