@@ -57,6 +57,9 @@ do
 	require_symbol "$symbol"
 done
 
+require_symbol CONFIG_IMAGEOPT
+require_symbol CONFIG_VERSIONOPT
+
 for symbol in \
 	CONFIG_PACKAGE_dnsmasq \
 	CONFIG_PACKAGE_luci-theme-bootstrap \

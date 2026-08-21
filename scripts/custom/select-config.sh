@@ -21,11 +21,13 @@ trap 'rm -f "$config_tmp"' EXIT INT TERM
 cp "$TOPDIR/configs/$target.config" "$TOPDIR/.config"
 
 sed \
+	-e '/^CONFIG_IMAGEOPT=/d' \
+	-e '/^# CONFIG_IMAGEOPT is not set$/d' \
 	-e '/^CONFIG_VERSIONOPT=/d' \
 	-e '/^# CONFIG_VERSIONOPT is not set$/d' \
 	-e '/^CONFIG_VERSION_CODE=/d' \
 	"$TOPDIR/.config" > "$config_tmp"
-printf 'CONFIG_VERSIONOPT=y\nCONFIG_VERSION_CODE="r28359-1db8d96e4866 / Build %s"\n' "$build_date" >> "$config_tmp"
+printf 'CONFIG_IMAGEOPT=y\nCONFIG_VERSIONOPT=y\nCONFIG_VERSION_CODE="r28359-1db8d96e4866 / Build %s"\n' "$build_date" >> "$config_tmp"
 mv "$config_tmp" "$TOPDIR/.config"
 
 make -C "$TOPDIR" defconfig
