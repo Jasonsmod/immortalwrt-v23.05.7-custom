@@ -6,7 +6,6 @@ ROOT_PASSWORD_HASH='$1$immortal$qSmS/2VYmMvAclD4gWaHO0'
 uci -q get system.@imm_init[0] >/dev/null || uci -q add system imm_init >/dev/null
 
 uci -q batch <<EOF
-set network.lan.ipaddr='192.168.50.1'
 set system.@imm_init[0].opkg_mirror='$MIRROR'
 set luci.main.mediaurlbase='/luci-static/argon'
 EOF

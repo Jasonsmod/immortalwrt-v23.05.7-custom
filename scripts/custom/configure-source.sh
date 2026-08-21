@@ -11,6 +11,9 @@ LUCI_COLLECTIONS="$TOPDIR/feeds/luci/collections"
 	exit 1
 }
 
+sed -i 's/192.168.1.1/192.168.50.1/g' "$TOPDIR/package/base-files/files/bin/config_generate"
+sed -i '9i conf-dir=/etc/dnsmasq.d' "$TOPDIR/package/network/services/dnsmasq/files/dnsmasq.conf"
+
 # Bootstrap 可能由 luci-light 等间接集合引入，需要检查所有 LuCI collections。
 find "$LUCI_COLLECTIONS" -type f -name Makefile \
 	-exec sed -i 's/+luci-theme-bootstrap/+luci-theme-argon/g' {} +
