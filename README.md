@@ -161,3 +161,5 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
 </table>
 
 [2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：x86 和 x86_64 仅保留 squashfs-combined 镜像、sha256sums 与 version.buildinfo。
+
+[2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：R619AC 仅保留 factory.ubi、sysupgrade.bin、sha256sums 与 version.buildinfo。

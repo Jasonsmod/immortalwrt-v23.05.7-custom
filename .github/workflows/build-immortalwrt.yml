@@ -165,6 +165,12 @@ jobs:
                   cp "$file" "release-assets/${target}-${name}"
                   ;;
               esac
+            elif [ "$target" = "r619ac" ]; then
+              case "$name" in
+                *factory.ubi|*sysupgrade.bin|sha256sums|version.buildinfo|*.version.buildinfo)
+                  cp "$file" "release-assets/${target}-${name}"
+                  ;;
+              esac
             else
               case "$name" in
                 *.bin|*.img|*.img.gz|*.itb|*.trx|*.ubi|*.squashfs*|*.tar.gz|*.vdi|*.vmdk|*.qcow2|sha256sums|*.manifest|*.json)
