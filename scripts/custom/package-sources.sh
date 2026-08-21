@@ -17,6 +17,8 @@ UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
 
 # 其他保留源码；除清单明确选中的包外，不会默认编译进固件。
 UPDATE_PACKAGE "ddns-go" "sirpdboy/luci-app-ddns-go" "main" "" "ddns-go"
+# 固定的 23.05 packages feed 尚未提供阿里云 DDNS 扩展，单独补充该包。
+UPDATE_PACKAGE "ddns-scripts-aliyun" "sbwml/openwrt-package" "main" "ddns-scripts-aliyun"
 UPDATE_PACKAGE "diskmanager" "4IceG/luci-app-mini-diskmanager" "main"
 UPDATE_PACKAGE "easytier" "EasyTier/luci-app-easytier" "main"
 UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5" "" "mosdns"
