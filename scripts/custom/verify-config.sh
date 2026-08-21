@@ -73,7 +73,7 @@ do
 done
 
 CONFIG_GENERATE="$TOPDIR/package/base-files/files/bin/config_generate"
-if [ ! -f "$CONFIG_GENERATE" ] || ! grep -Fqx 'lan) ipad=${ipaddr:-"192.168.50.1"} ;;' "$CONFIG_GENERATE"; then
+if [ ! -f "$CONFIG_GENERATE" ] || ! grep -Fq 'lan) ipad=${ipaddr:-"192.168.50.1"} ;;' "$CONFIG_GENERATE"; then
 	printf '错误：默认管理地址未设置为 192.168.50.1。\n' >&2
 	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
 fi
