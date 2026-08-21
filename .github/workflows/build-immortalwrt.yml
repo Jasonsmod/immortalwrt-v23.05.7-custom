@@ -84,6 +84,8 @@ jobs:
       - name: 更新并安装官方 Feeds
         run: |
           perl ./scripts/feeds update -a
+          rm -rf feeds/packages/lang/golang
+          git clone --depth 1 --single-branch --branch 26.x https://github.com/sbwml/packages_lang_golang.git feeds/packages/lang/golang
           perl ./scripts/feeds install -a
 
       - name: 同步第三方源码
