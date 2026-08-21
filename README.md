@@ -9,6 +9,14 @@ This repository contains a custom multi-target build based on ImmortalWrt v23.05
 
 Default login address: http://192.168.50.1, username: __root__, password: __password__.
 
+## 最新固件下载 ✅ 已完成
+
+固件发布到 [GitHub Releases](https://github.com/Jasonsmod/immortalwrt-v23.05.7-custom/releases)，以下链接由 GitHub Actions 自动更新。
+
+<!-- FIRMWARE_RELEASES_START -->
+首次成功发布后自动生成下载链接。
+<!-- FIRMWARE_RELEASES_END -->
+
 ## 定制固件架构 ✅ 已完成
 
 本仓库在 ImmortalWrt `v23.05.7` 完整源码上维护三套独立 seed config，通过相同的软件包同步、默认配置和验证流程生成固件。

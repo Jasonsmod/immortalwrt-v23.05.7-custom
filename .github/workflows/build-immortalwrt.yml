@@ -19,9 +19,9 @@ on:
         default: false
         type: boolean
       upload_release:
-        description: 同时发布到 GitHub Release
+        description: 同时发布到 GitHub Release 并更新 README 下载链接
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -144,10 +144,28 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
       - name: 下载全部构建产物
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: 整理 Release 文件
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -path '*/bin/targets/*' -print0 | while IFS= read -r -d '' file; do
+            artifact_dir="$(printf '%s' "$file" | sed 's#^artifacts/##; s#/.*##')"
+            target="${artifact_dir#immortalwrt-23.05.7-}"
+            name="$(basename "$file")"
+            case "$name" in
+              *.bin|*.img|*.img.gz|*.itb|*.trx|*.ubi|*.squashfs*|*.tar.gz|*.vdi|*.vmdk|*.qcow2|sha256sums|*.manifest|*.json)
+                cp "$file" "release-assets/${target}-${name}"
+                ;;
+            esac
+          done
+          test -n "$(find release-assets -type f -print -quit)"
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
@@ -155,4 +173,69 @@ jobs:
           tag_name: immortalwrt-v23.05.7-${{ github.run_number }}
           name: ImmortalWrt v23.05.7 build ${{ github.run_number }}
           generate_release_notes: true
-          files: artifacts/**/*
+          files: release-assets/*
+
+      - name: 更新 README 固件下载链接
+        env:
+          RELEASE_TAG: immortalwrt-v23.05.7-${{ github.run_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import quote
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          start = "<!-- FIRMWARE_RELEASES_START -->"
+          end = "<!-- FIRMWARE_RELEASES_END -->"
+          repository = os.environ["REPOSITORY"]
+          tag = os.environ["RELEASE_TAG"]
+          targets = {"r619ac": "R619AC", "x86": "X86", "x86_64": "X86_64"}
+          suffixes = (".bin", ".img", ".img.gz", ".itb", ".trx", ".ubi", ".tar.gz", ".vdi", ".vmdk", ".qcow2")
+
+          def is_firmware(name):
+              return name.endswith(suffixes) or ".squashfs" in name
+
+          links = []
+          for path in sorted(Path("release-assets").iterdir()):
+              if not path.is_file() or not is_firmware(path.name):
+                  continue
+              target = next((key for key in targets if path.name.startswith(key + "-")), "")
+              if not target:
+                  continue
+              url = f"https://github.com/{repository}/releases/download/{tag}/{quote(path.name)}"
+              links.append((target, path.name, url))
+
+          lines = [
+              start,
+              f"### ImmortalWrt v23.05.7 构建 {tag.rsplit('-', 1)[-1]}",
+              "",
+          ]
+          for target in targets:
+              target_links = [(name, url) for key, name, url in links if key == target]
+              if not target_links:
+                  continue
+              lines.append(f"- **{targets[target]}**")
+              lines.extend(f"  - [{name}]({url})" for name, url in target_links)
+          if not links:
+              lines.append("- 暂无可下载固件。")
+          lines.extend([end, ""])
+          block = "\n".join(lines)
+          pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
+          if pattern.search(text):
+              text = pattern.sub(block.rstrip(), text, count=1)
+          else:
+              marker = "Default login address: http://192.168.50.1, username: __root__, password: __password__."
+              text = text.replace(marker, marker + "\n\n" + block.rstrip(), 1)
+          readme.write_text(text, encoding="utf-8")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if ! git diff --cached --quiet; then
+            git commit -m "更新固件 Release 下载链接"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
