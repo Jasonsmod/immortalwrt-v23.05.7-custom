@@ -40,6 +40,7 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 | opkg 镜像 | `https://mirrors.vsean.net/openwrt` |
 | DNS/DHCP | `dnsmasq-full` |
 | TCP 拥塞控制 | BBR，默认队列规则为 FQ |
+| 固件版本 | LuCI 首页显示北京时间编译日期 |
 
 默认设置由 `custom-firmware-defaults` 包在首次启动时应用。软件源的具体架构路径仍由 ImmortalWrt 构建系统按照目标自动生成。
 
@@ -55,7 +56,15 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 - KMS：`luci-app-vlmcsd`、`vlmcsd`。
 - 动态 DNS：LuCI、DDNS Scripts 和阿里云服务脚本。
 - BBR：`kmod-tcp-bbr` 和 FQ 调度支持。
-- 
+
+## OpenVPN Server GUI ✅ 已完成
+
+- 在“VPN → OpenVPN 服务器”中配置服务端协议、端口、网段、DNS 和公网地址。
+- 通过 Easy-RSA 独立生成 CA、服务器证书和客户端证书，不携带公共默认私钥。
+- 支持在 LuCI 中生成、吊销客户端证书并下载内嵌证书的 `.ovpn`。
+- 默认创建 `vpn0`（绑定 `tun0`）和待配置的 `wg0` 接口。
+- VPN 防火墙允许 `LAN ↔ VPN` 和 `VPN → WAN`，WAN 仅开放 OpenVPN 服务端口。
+
 ## 本地编译流程 ✅ 已完成
 
 必须在大小写敏感的 Linux 文件系统中编译，源码路径不得包含空格或非 ASCII 字符。Windows 用户应将仓库放入 WSL2 的 Linux 文件系统，而不是直接在 NTFS 项目目录中编译。
@@ -69,6 +78,7 @@ bash scripts/custom/configure-source.sh
 bash scripts/custom/check-package-conflicts.sh
 bash scripts/custom/select-config.sh r619ac   # 或 x86、x86_64
 bash scripts/custom/verify-config.sh r619ac
+bash scripts/custom/verify-openvpn-server.sh
 make download -j8
 make -j"$(nproc)" || make -j1 V=s
 ```
@@ -165,3 +175,5 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
 [2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：R619AC 仅保留 factory.ubi、sysupgrade.bin、sha256sums 与 version.buildinfo。
 
 [2026-08-21] 修复 | 模块：MOSDNS 与 R619AC | 内容：修复 MOSDNS LuCI 页面资源被误删的问题，并增加 R619AC 刷机镜像结构和设备元数据校验。
+
+[2026-08-22] 新增 | 模块：OpenVPN Server 与构建信息 | 内容：新增安全证书管理 GUI、vpn0/wg0、推荐防火墙规则，并在 LuCI 首页显示北京时间编译日期。

@@ -43,6 +43,7 @@ for symbol in \
 	CONFIG_PACKAGE_luci-app-mosdns \
 	CONFIG_PACKAGE_luci-proto-wireguard \
 	CONFIG_PACKAGE_luci-app-openvpn \
+	CONFIG_PACKAGE_luci-app-openvpn-server-custom \
 	CONFIG_PACKAGE_openvpn-openssl \
 	CONFIG_PACKAGE_openvpn-easy-rsa \
 	CONFIG_PACKAGE_kmod-tun \
@@ -75,6 +76,17 @@ done
 CONFIG_GENERATE="$TOPDIR/package/base-files/files/bin/config_generate"
 if [ ! -f "$CONFIG_GENERATE" ] || ! grep -Fq 'lan) ipad=${ipaddr:-"192.168.50.1"} ;;' "$CONFIG_GENERATE"; then
 	printf '错误：默认管理地址未设置为 192.168.50.1。\n' >&2
+	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+fi
+
+if ! grep -Eq '^CONFIG_VERSION_CODE="r28359-1db8d96e4866 / Build [0-9]{4}-[0-9]{2}-[0-9]{2}"$' "$CONFIG"; then
+	printf '错误：固件版本未写入北京时间编译日期。\n' >&2
+	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+fi
+
+OPENWRT_RELEASE="$TOPDIR/package/base-files/files/etc/openwrt_release"
+if [ ! -f "$OPENWRT_RELEASE" ] || ! grep -Fq "DISTRIB_DESCRIPTION='%D %V %C'" "$OPENWRT_RELEASE"; then
+	printf '错误：LuCI首页固件版本字段不会包含编译日期。\n' >&2
 	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
 fi
 

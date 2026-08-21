@@ -1,0 +1,76 @@
+#!/bin/sh
+
+set -eu
+
+if ! uci -q get network.vpn0 >/dev/null; then
+	uci -q batch <<'EOF'
+set network.vpn0=interface
+set network.vpn0.proto='none'
+set network.vpn0.device='tun0'
+set network.vpn0.auto='1'
+EOF
+fi
+
+if ! uci -q get network.wg0 >/dev/null; then
+	uci -q batch <<'EOF'
+set network.wg0=interface
+set network.wg0.proto='wireguard'
+set network.wg0.auto='0'
+EOF
+fi
+
+if ! uci -q get firewall.vpn >/dev/null; then
+	uci -q batch <<'EOF'
+set firewall.vpn=zone
+set firewall.vpn.name='vpn'
+set firewall.vpn.network='vpn0'
+set firewall.vpn.input='ACCEPT'
+set firewall.vpn.output='ACCEPT'
+set firewall.vpn.forward='ACCEPT'
+set firewall.vpn.masq='1'
+set firewall.vpn.mtu_fix='1'
+EOF
+fi
+
+if ! uci -q get firewall.openvpn_server >/dev/null; then
+	uci -q batch <<'EOF'
+set firewall.openvpn_server=rule
+set firewall.openvpn_server.name='Allow-OpenVPN-Server'
+set firewall.openvpn_server.src='wan'
+set firewall.openvpn_server.proto='udp'
+set firewall.openvpn_server.dest_port='1194'
+set firewall.openvpn_server.target='ACCEPT'
+EOF
+fi
+
+if ! uci -q get firewall.lan_to_vpn >/dev/null; then
+	uci -q batch <<'EOF'
+set firewall.lan_to_vpn=forwarding
+set firewall.lan_to_vpn.src='lan'
+set firewall.lan_to_vpn.dest='vpn'
+EOF
+fi
+
+if ! uci -q get firewall.vpn_to_lan >/dev/null; then
+	uci -q batch <<'EOF'
+set firewall.vpn_to_lan=forwarding
+set firewall.vpn_to_lan.src='vpn'
+set firewall.vpn_to_lan.dest='lan'
+EOF
+fi
+
+if ! uci -q get firewall.vpn_to_wan >/dev/null; then
+	uci -q batch <<'EOF'
+set firewall.vpn_to_wan=forwarding
+set firewall.vpn_to_wan.src='vpn'
+set firewall.vpn_to_wan.dest='wan'
+EOF
+fi
+
+uci -q commit network
+uci -q commit firewall
+
+/usr/libexec/openvpn-server-manager apply >/dev/null 2>&1 || true
+rm -f /tmp/luci-indexcache
+
+exit 0
