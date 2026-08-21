@@ -6,6 +6,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TOPDIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 CONFIG="$TOPDIR/.config"
 target="${1-}"
+CONFIG_ERRORS=0
 
 [ -f "$CONFIG" ] || {
 	printf '错误：缺少 .config。\n' >&2
@@ -13,16 +14,16 @@ target="${1-}"
 }
 
 require_symbol() {
-	grep -qx "$1=y" "$CONFIG" || {
+	if ! grep -qx "$1=y" "$CONFIG"; then
 		printf '错误：配置未启用 %s。\n' "$1" >&2
-		exit 1
-	}
+		CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+	fi
 }
 
 reject_symbol() {
 	if grep -qx "$1=y" "$CONFIG"; then
 		printf '错误：配置不应启用 %s。\n' "$1" >&2
-		exit 1
+		CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
 	fi
 }
 
@@ -71,9 +72,14 @@ do
 	reject_symbol "$symbol"
 done
 
-grep -qx 'CONFIG_TARGET_PREINIT_IP="192.168.50.1"' "$CONFIG" || {
+if ! grep -qx 'CONFIG_TARGET_PREINIT_IP="192.168.50.1"' "$CONFIG"; then
 	printf '错误：默认管理地址不是 192.168.50.1。\n' >&2
+	CONFIG_ERRORS=$((CONFIG_ERRORS + 1))
+fi
+
+if [ "$CONFIG_ERRORS" -ne 0 ]; then
+	printf '错误：%s 配置校验发现 %s 项问题。\n' "$target" "$CONFIG_ERRORS" >&2
 	exit 1
-}
+fi
 
 printf '%s 配置校验通过。\n' "$target"
