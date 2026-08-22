@@ -11,6 +11,12 @@ UPDATE_PACKAGE "momo" "nikkinikki-org/OpenWrt-momo" "main"
 # PACKAGE_mihomo-meta 的递归依赖。
 UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main" "" "mihomo-alpha"
 UPDATE_PACKAGE "openclash" "vernesong/OpenClash" "master" "luci-app-openclash"
+OPENCLASH_INIT="$CUSTOM_PACKAGE_DIR/openclash/root/etc/init.d/openclash"
+[ -f "$OPENCLASH_INIT" ] || fail "OpenClash 缺少启动脚本"
+if grep -Eq '^[[:space:]]*procd_kill "openclash"[[:space:]]*$' "$OPENCLASH_INIT"; then
+	sed -i '/^[[:space:]]*procd_kill "openclash"[[:space:]]*$/c\      procd_running "openclash" >/dev/null 2>&1 && procd_kill "openclash" >/dev/null 2>&1 || true' "$OPENCLASH_INIT"
+fi
+grep -Fq 'procd_running "openclash" >/dev/null 2>&1 && procd_kill "openclash" >/dev/null 2>&1 || true' "$OPENCLASH_INIT" || fail "无法修复 OpenClash procd 停止逻辑"
 UPDATE_PACKAGE "passwall" "Openwrt-Passwall/openwrt-passwall" "main" "luci-app-passwall"
 UPDATE_PACKAGE "passwall2" "Openwrt-Passwall/openwrt-passwall2" "main" "luci-app-passwall2"
 UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"

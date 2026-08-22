@@ -7,7 +7,6 @@ CLIENT_NAME="${2-}"
 EASYRSA_DIR='/etc/easy-rsa'
 PKI_DIR="$EASYRSA_DIR/pki"
 OPENVPN_DIR='/etc/openvpn/server'
-TLS_CRYPT_KEY="$OPENVPN_DIR/tls-crypt.key"
 OPENVPN_SECTION='custom_server'
 
 export EASYRSA="$EASYRSA_DIR"
@@ -20,6 +19,114 @@ umask 077
 fail() {
 	printf '错误：%s\n' "$*" >&2
 	exit 1
+}
+
+DATA_CIPHERS='CHACHA20-POLY1305
+AES-128-GCM
+AES-256-GCM
+AES-128-CBC
+AES-192-CBC
+AES-256-CBC
+AES-128-OFB
+AES-192-OFB
+AES-256-OFB
+AES-128-CFB
+AES-192-CFB
+AES-256-CFB
+AES-128-CFB1
+AES-192-CFB1
+AES-256-CFB1
+AES-128-CFB8
+AES-192-CFB8
+AES-256-CFB8
+DES-CFB
+DES-CBC
+RC2-CBC
+RC2-CFB
+RC2-OFB
+DES-EDE-CBC
+DES-EDE3-CBC
+DES-OFB
+DES-EDE-CFB
+DES-EDE3-CFB
+DES-EDE-OFB
+DES-EDE3-OFB
+DESX-CBC
+RC2-40-CBC
+CAST5-CBC
+CAST5-CFB
+CAST5-OFB
+RC2-64-CBC
+DES-CFB1
+DES-CFB8
+DES-EDE3-CFB1
+DES-EDE3-CFB8
+SEED-CBC
+SEED-OFB
+SEED-CFB'
+
+supported_data_cipher() {
+	command -v openvpn >/dev/null 2>&1 || return 1
+	openvpn --show-ciphers 2>/dev/null |
+		awk 'NF { print $1 }' |
+		grep -Fxq "$1"
+}
+
+list_data_ciphers() {
+	local cipher
+	for cipher in $DATA_CIPHERS; do
+		supported_data_cipher "$cipher" && printf '%s\n' "$cipher"
+	done
+	return 0
+}
+
+recommended_data_cipher() {
+	local preferred fallback
+
+	if grep -Eiq '(^|[[:space:]])aes([[:space:]]|$)' /proc/cpuinfo; then
+		preferred='AES-128-GCM'
+		fallback='CHACHA20-POLY1305'
+	else
+		preferred='CHACHA20-POLY1305'
+		fallback='AES-128-GCM'
+	fi
+
+	if supported_data_cipher "$preferred"; then
+		printf '%s\n' "$preferred"
+	elif supported_data_cipher "$fallback"; then
+		printf '%s\n' "$fallback"
+	else
+		fail '当前 OpenVPN 不支持推荐的 AEAD 加密算法。'
+	fi
+}
+
+configured_data_cipher() {
+	local data_cipher
+	data_cipher="$(uci -q get openvpn_server.main.data_cipher || true)"
+	[ -n "$data_cipher" ] || return 1
+	list_data_ciphers | grep -Fxq "$data_cipher" ||
+		fail '所选加密算法不可用或不允许使用。'
+	printf '%s\n' "$data_cipher"
+}
+
+set_openvpn_default() {
+	local option="$1"
+	local value="$2"
+	uci -q get "openvpn.$OPENVPN_SECTION.$option" >/dev/null 2>&1 ||
+		uci -q set "openvpn.$OPENVPN_SECTION.$option=$value"
+}
+
+replace_managed_push() {
+	local marker="$1"
+	local value="$2"
+	local previous
+
+	previous="$(uci -q get "openvpn_server.main.$marker" || true)"
+	[ -z "$previous" ] ||
+		uci -q del_list "openvpn.$OPENVPN_SECTION.push=$previous" >/dev/null 2>&1 || true
+	uci -q del_list "openvpn.$OPENVPN_SECTION.push=$value" >/dev/null 2>&1 || true
+	uci -q add_list "openvpn.$OPENVPN_SECTION.push=$value"
+	uci -q set "openvpn_server.main.$marker=$value"
 }
 
 valid_client_name() {
@@ -58,8 +165,7 @@ pki_ready() {
 	[ -s "$PKI_DIR/ca.crt" ] && \
 	[ -s "$PKI_DIR/issued/server.crt" ] && \
 	[ -s "$PKI_DIR/private/server.key" ] && \
-	[ -s "$PKI_DIR/crl.pem" ] && \
-	[ -s "$TLS_CRYPT_KEY" ]
+	[ -s "$PKI_DIR/crl.pem" ]
 }
 
 valid_client_certificate() {
@@ -80,7 +186,7 @@ reload_services() {
 
 apply_configuration() {
 	local enabled proto port remote_host vpn_network vpn_netmask
-	local lan_network lan_netmask client_dns max_clients openvpn_enabled
+	local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
 
 	enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
 	proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
@@ -92,6 +198,10 @@ apply_configuration() {
 	lan_netmask="$(uci -q get openvpn_server.main.lan_netmask || printf '255.255.255.0')"
 	client_dns="$(uci -q get openvpn_server.main.client_dns || printf '192.168.50.1')"
 	max_clients="$(uci -q get openvpn_server.main.max_clients || printf '10')"
+	data_cipher=''
+	if uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1; then
+		data_cipher="$(configured_data_cipher)"
+	fi
 
 	case "$enabled" in 0|1) ;; *) fail '启用状态无效。' ;; esac
 	case "$proto" in udp|tcp-server) ;; *) fail '协议只能是 UDP 或 TCP。' ;; esac
@@ -113,40 +223,49 @@ apply_configuration() {
 	mkdir -p "$OPENVPN_DIR"
 	chmod 0700 "$OPENVPN_DIR"
 
-	uci -q delete "openvpn.$OPENVPN_SECTION" >/dev/null 2>&1 || true
 	uci -q batch <<EOF
 set openvpn.$OPENVPN_SECTION='openvpn'
 set openvpn.$OPENVPN_SECTION.enabled='$openvpn_enabled'
-set openvpn.$OPENVPN_SECTION.dev='tun0'
 set openvpn.$OPENVPN_SECTION.proto='$proto'
 set openvpn.$OPENVPN_SECTION.port='$port'
-set openvpn.$OPENVPN_SECTION.topology='subnet'
 set openvpn.$OPENVPN_SECTION.server='$vpn_network $vpn_netmask'
-set openvpn.$OPENVPN_SECTION.ca='$PKI_DIR/ca.crt'
-set openvpn.$OPENVPN_SECTION.cert='$PKI_DIR/issued/server.crt'
-set openvpn.$OPENVPN_SECTION.key='$PKI_DIR/private/server.key'
-set openvpn.$OPENVPN_SECTION.dh='none'
-set openvpn.$OPENVPN_SECTION.crl_verify='$PKI_DIR/crl.pem'
-set openvpn.$OPENVPN_SECTION.tls_crypt='$TLS_CRYPT_KEY'
-set openvpn.$OPENVPN_SECTION.tls_version_min='1.2'
-set openvpn.$OPENVPN_SECTION.auth='SHA256'
-set openvpn.$OPENVPN_SECTION.keepalive='10 120'
-set openvpn.$OPENVPN_SECTION.persist_key='1'
-set openvpn.$OPENVPN_SECTION.persist_tun='1'
-set openvpn.$OPENVPN_SECTION.client_to_client='1'
-set openvpn.$OPENVPN_SECTION.user='nobody'
-set openvpn.$OPENVPN_SECTION.group='nogroup'
 set openvpn.$OPENVPN_SECTION.max_clients='$max_clients'
-set openvpn.$OPENVPN_SECTION.status='/var/run/openvpn-server.status'
-set openvpn.$OPENVPN_SECTION.verb='3'
-add_list openvpn.$OPENVPN_SECTION.push='route $lan_network $lan_netmask'
-add_list openvpn.$OPENVPN_SECTION.push='dhcp-option DNS $client_dns'
-add_list openvpn.$OPENVPN_SECTION.push='redirect-gateway def1 bypass-dhcp'
 set firewall.openvpn_server.proto='${proto%-server}'
 set firewall.openvpn_server.dest_port='$port'
 EOF
 
+	uci -q delete "openvpn.$OPENVPN_SECTION.tls_crypt" >/dev/null 2>&1 || true
+	uci -q delete "openvpn.$OPENVPN_SECTION.tls_auth" >/dev/null 2>&1 || true
+
+	set_openvpn_default dev 'tun0'
+	set_openvpn_default topology 'subnet'
+	set_openvpn_default ca "$PKI_DIR/ca.crt"
+	set_openvpn_default cert "$PKI_DIR/issued/server.crt"
+	set_openvpn_default key "$PKI_DIR/private/server.key"
+	set_openvpn_default dh 'none'
+	set_openvpn_default crl_verify "$PKI_DIR/crl.pem"
+	set_openvpn_default tls_version_min '1.2'
+	set_openvpn_default auth 'SHA256'
+	set_openvpn_default keepalive '10 120'
+	set_openvpn_default persist_key '1'
+	set_openvpn_default persist_tun '1'
+	set_openvpn_default client_to_client '1'
+	set_openvpn_default user 'nobody'
+	set_openvpn_default group 'nogroup'
+	set_openvpn_default status '/var/run/openvpn-server.status'
+	set_openvpn_default verb '3'
+
+	if [ -n "$data_cipher" ]; then
+		uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers=$data_cipher"
+		uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers_fallback=$data_cipher"
+	fi
+
+	replace_managed_push managed_push_route "route $lan_network $lan_netmask"
+	replace_managed_push managed_push_dns "dhcp-option DNS $client_dns"
+	replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
+
 	uci -q commit openvpn
+	uci -q commit openvpn_server
 	uci -q commit firewall
 	reload_services
 
@@ -174,10 +293,9 @@ initialize_pki() {
 	EASYRSA_REQ_CN='ImmortalWrt OpenVPN CA' easyrsa build-ca nopass
 	easyrsa build-server-full server nopass
 	easyrsa gen-crl
-	openvpn --genkey secret "$TLS_CRYPT_KEY"
 
 	chmod 0700 "$PKI_DIR" "$PKI_DIR/private" "$OPENVPN_DIR"
-	chmod 0600 "$PKI_DIR/private/ca.key" "$PKI_DIR/private/server.key" "$TLS_CRYPT_KEY"
+	chmod 0600 "$PKI_DIR/private/ca.key" "$PKI_DIR/private/server.key"
 	chmod 0644 "$PKI_DIR/crl.pem"
 	apply_configuration
 	printf 'OpenVPN CA和服务器证书已生成。\n'
@@ -257,11 +375,6 @@ EOF
 	sed -n '/-----BEGIN PRIVATE KEY-----/,/-----END PRIVATE KEY-----/p' "$PKI_DIR/private/$CLIENT_NAME.key"
 	cat <<'EOF'
 </key>
-<tls-crypt>
-EOF
-	cat "$TLS_CRYPT_KEY"
-	cat <<'EOF'
-</tls-crypt>
 EOF
 }
 
@@ -272,5 +385,7 @@ case "$ACTION" in
 	revoke-client) revoke_client ;;
 	list-clients) list_clients ;;
 	export-client) export_client ;;
-	*) fail '用法：openvpn-server-manager {apply|init-pki|create-client|revoke-client|list-clients|export-client} [客户端名称]' ;;
+	list-ciphers) list_data_ciphers ;;
+	recommended-cipher) recommended_data_cipher ;;
+	*) fail '用法：openvpn-server-manager {apply|init-pki|create-client|revoke-client|list-clients|export-client|list-ciphers|recommended-cipher} [客户端名称]' ;;
 esac

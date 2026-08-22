@@ -1,0 +1,154 @@
+<%+header%>
+<%
+local dispatcher = require "luci.dispatcher"
+local save_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "client-save")
+local list_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "clients")
+local function selected(value, current)
+	return value == current and ' selected="selected"' or ""
+end
+local function checked(value)
+	return value == "1" and ' checked="checked"' or ""
+end
+%>
+
+<div class="cbi-map">
+	<h2 name="content"><%=#profile.id > 0 and "编辑 OpenVPN 客户端" or "添加 OpenVPN 客户端"%></h2>
+	<div class="cbi-map-descr">UI 未识别但合法的 OVPN 参数保存在“附加配置”中，不会在保存时丢失。</div>
+	<% if message and #message > 0 then %>
+	<div class="alert-message warning"><%=pcdata(message)%></div>
+	<% end %>
+
+	<form method="post" action="<%=pcdata(save_url)%>">
+		<input type="hidden" name="token" value="<%=token%>" />
+		<input type="hidden" name="id" value="<%=pcdata(profile.id)%>" />
+		<fieldset class="cbi-section">
+			<legend>客户端设置</legend>
+
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="name">拨号名称</label>
+				<div class="cbi-value-field"><input id="name" name="name" type="text" maxlength="64"
+					value="<%=pcdata(profile.name)%>" required="required" /></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="remote_host">服务器 IP/域名</label>
+				<div class="cbi-value-field"><input id="remote_host" name="remote_host" type="text"
+					value="<%=pcdata(profile.remote_host)%>" required="required" /></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="remote_port">服务器端口</label>
+				<div class="cbi-value-field"><input id="remote_port" name="remote_port" type="number"
+					min="1" max="65535" value="<%=pcdata(profile.remote_port)%>" required="required" /></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="auth_mode">认证方式</label>
+				<div class="cbi-value-field"><select id="auth_mode" name="auth_mode" onchange="updateAuthFields()">
+					<option value="account"<%=selected("account", profile.auth_mode)%>>账号认证</option>
+					<option value="cert"<%=selected("cert", profile.auth_mode)%>>证书认证</option>
+					<option value="both"<%=selected("both", profile.auth_mode)%>>账号+证书</option>
+				</select></div>
+			</div>
+			<div class="cbi-value auth-account">
+				<label class="cbi-value-title" for="username">用户名</label>
+				<div class="cbi-value-field"><input id="username" name="username" type="text" maxlength="128"
+					value="<%=pcdata(profile.username)%>" /></div>
+			</div>
+			<div class="cbi-value auth-account">
+				<label class="cbi-value-title" for="password">密码</label>
+				<div class="cbi-value-field"><input id="password" name="password" type="password" maxlength="256"
+					placeholder="<%=profile.has_password and "留空表示保留原密码" or "请输入密码"%>" autocomplete="new-password" />
+				<div class="cbi-value-description">编辑已有配置时可只修改用户名，密码留空将保留原密码。</div></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="bind_interface">线路</label>
+				<div class="cbi-value-field"><select id="bind_interface" name="bind_interface">
+					<% for _, interface in ipairs(interfaces) do %>
+					<option value="<%=pcdata(interface)%>"<%=selected(interface, profile.bind_interface)%>><%=interface == "auto" and "自动" or pcdata(interface)%></option>
+					<% end %>
+				</select></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="proto">隧道协议</label>
+				<div class="cbi-value-field"><select id="proto" name="proto">
+					<option value="udp"<%=selected("udp", profile.proto)%>>UDP</option>
+					<option value="tcp-client"<%=selected("tcp-client", profile.proto)%>>TCP</option>
+				</select></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title">隧道类型</label>
+				<div class="cbi-value-field">TUN</div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="data_cipher">加密算法</label>
+				<div class="cbi-value-field"><select id="data_cipher" name="data_cipher">
+					<% for _, cipher in ipairs(ciphers) do %>
+					<option value="<%=pcdata(cipher)%>"<%=selected(cipher, profile.data_cipher)%>><%=cipher == "auto" and "自动（按 CPU 推荐）" or pcdata(cipher)%></option>
+					<% end %>
+				</select>
+				<div class="cbi-value-description">BF 系列算法不允许使用。</div></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="lzo">LZO 压缩</label>
+				<div class="cbi-value-field"><input id="lzo" name="lzo" type="checkbox" value="1"<%=checked(profile.lzo)%> />
+					<label for="lzo">开启</label>
+					<div class="cbi-value-description">压缩可能带来安全风险，仅在服务器明确要求时启用。</div>
+				</div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="tun_mtu">MTU</label>
+				<div class="cbi-value-field"><input id="tun_mtu" name="tun_mtu" type="number"
+					min="576" max="65535" value="<%=pcdata(profile.tun_mtu)%>" required="required" /></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="ca">CA 证书</label>
+				<div class="cbi-value-field"><textarea id="ca" name="ca" rows="8"><%=pcdata(profile.ca)%></textarea></div>
+			</div>
+			<div class="cbi-value auth-cert">
+				<label class="cbi-value-title" for="cert">客户端证书</label>
+				<div class="cbi-value-field"><textarea id="cert" name="cert" rows="8"><%=pcdata(profile.cert)%></textarea></div>
+			</div>
+			<div class="cbi-value auth-cert">
+				<label class="cbi-value-title" for="key">客户端私钥</label>
+				<div class="cbi-value-field"><textarea id="key" name="key" rows="8"><%=pcdata(profile.key)%></textarea></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="extra">附加配置</label>
+				<div class="cbi-value-field"><textarea id="extra" name="extra" rows="10"
+					placeholder="例如：&#10;tcp-queue-limit 32&#10;mtu-disc no"><%=pcdata(profile.extra)%></textarea>
+				<div class="cbi-value-description">未知合法参数会原样保留；脚本、插件和管理接口等高危指令会被拒绝。</div></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="accept_routes">服务器路由推送</label>
+				<div class="cbi-value-field"><input id="accept_routes" name="accept_routes" type="checkbox"
+					value="1"<%=checked(profile.accept_routes)%> /><label for="accept_routes">接受</label></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="routes">添加路由</label>
+				<div class="cbi-value-field"><textarea id="routes" name="routes" rows="5"
+					placeholder="192.168.1.0/24，一行一条"><%=pcdata(profile.routes)%></textarea></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="enabled">启用</label>
+				<div class="cbi-value-field"><input id="enabled" name="enabled" type="checkbox"
+					value="1"<%=checked(profile.enabled)%> /></div>
+			</div>
+		</fieldset>
+		<div class="cbi-page-actions">
+			<input class="btn cbi-button cbi-button-save" type="submit" value="保存" />
+			<a class="btn cbi-button cbi-button-reset" href="<%=pcdata(list_url)%>">取消</a>
+		</div>
+	</form>
+</div>
+
+<script type="text/javascript">
+function updateAuthFields() {
+	var mode = document.getElementById('auth_mode').value;
+	var account = document.querySelectorAll('.auth-account');
+	var cert = document.querySelectorAll('.auth-cert');
+	for (var i = 0; i < account.length; i++)
+		account[i].style.display = (mode === 'account' || mode === 'both') ? '' : 'none';
+	for (var j = 0; j < cert.length; j++)
+		cert[j].style.display = (mode === 'cert' || mode === 'both') ? '' : 'none';
+}
+updateAuthFields();
+</script>
+<%+footer%>

@@ -1,0 +1,24 @@
+<%+cbi/valueheader%>
+<%
+local dispatcher = require "luci.dispatcher"
+local export_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-export")
+local cbid = self:cbid(section)
+%>
+<input id="server-client-name" type="hidden" name="server_client_name" value="" />
+<input type="submit"
+	class="btn cbi-button cbi-button-download"
+	value="导出 Windows 客户端配置"
+	formaction="<%=pcdata(export_url)%>"
+	formmethod="post"
+	onclick="var name=prompt('请输入客户端证书名称：','windows-client'); if(!name){return false;} document.getElementById('server-client-name').value=name;" />
+<% if not self.pki_ready then %>
+<input type="submit"
+	id="<%=cbid%>"
+	name="<%=cbid%>"
+	value="<%=pcdata(self.inputtitle)%>"
+	class="btn cbi-button cbi-button-apply" />
+<% end %>
+<div class="cbi-value-description">
+	客户端配置需要先创建客户端证书；CA 和服务器证书只允许初始化一次。
+</div>
+<%+cbi/valuefooter%>

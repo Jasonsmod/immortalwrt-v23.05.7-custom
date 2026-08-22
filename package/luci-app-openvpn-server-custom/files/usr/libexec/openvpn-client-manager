@@ -1,0 +1,646 @@
+#!/bin/sh
+
+set -eu
+
+ACTION="${1-}"
+ARG="${2-}"
+CONFIG='openvpn_client_custom'
+BASE_DIR='/etc/openvpn/client-custom'
+MAX_IMPORT_SIZE=1048576
+
+fail() {
+	printf '错误：%s\n' "$*" >&2
+	exit 1
+}
+
+valid_id() {
+	case "$1" in
+		c[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+profile_exists() {
+	valid_id "$1" && uci -q get "$CONFIG.$1" >/dev/null 2>&1
+}
+
+profile_dir() {
+	printf '%s/%s\n' "$BASE_DIR" "$1"
+}
+
+new_id() {
+	local id hex
+	while :; do
+		hex="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+		[ "${#hex}" -eq 8 ] || hex="$(printf '%08x' "$$")"
+		id="c$hex"
+		if ! uci -q get "$CONFIG.$id" >/dev/null 2>&1; then
+			printf '%s\n' "$id"
+			return 0
+		fi
+	done
+}
+
+read_field() {
+	local file="$1/$2"
+	[ -f "$file" ] || return 0
+	cat "$file"
+}
+
+valid_single_line() {
+	[ -n "$1" ] || return 1
+	[ "${#1}" -le "$2" ] || return 1
+	! printf '%s' "$1" | LC_ALL=C grep -q '[[:cntrl:]|]'
+}
+
+valid_host() {
+	valid_single_line "$1" 253 || return 1
+	case "$1" in *[!A-Za-z0-9._:-]*) return 1 ;; esac
+}
+
+valid_uint() {
+	case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac
+}
+
+valid_bool() {
+	case "$1" in 0|1) return 0 ;; *) return 1 ;; esac
+}
+
+valid_interface() {
+	case "$1" in auto) return 0 ;; ''|*[!A-Za-z0-9_.:-]*) return 1 ;; *) return 0 ;; esac
+}
+
+resolve_bind_device() {
+	local interface="$1" device
+	[ "$interface" != 'auto' ] || return 0
+	openvpn --help 2>/dev/null | grep -q -- '--bind-dev' ||
+		fail '当前OpenVPN不支持绑定出口设备。'
+	device="$(ubus call "network.interface.$interface" status 2>/dev/null |
+		jsonfilter -e '@.l3_device' 2>/dev/null || true)"
+	[ -n "$device" ] || device="$(uci -q get "network.$interface.device" || true)"
+	[ -n "$device" ] || fail "无法解析出口线路$interface的设备。"
+	printf '%s\n' "$device"
+}
+
+valid_cidr() {
+	printf '%s\n' "$1" | awk -F '[/\.]' '
+		NF != 5 { exit 1 }
+		{
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i < 0 || $i > 255) exit 1
+			}
+			if ($5 !~ /^[0-9]+$/ || $5 < 0 || $5 > 32) exit 1
+		}
+	'
+}
+
+cidr_route() {
+	printf '%s\n' "$1" | awk -F '[/\.]' '
+		{
+			prefix = $5
+			for (i = 1; i <= 4; i++) {
+				bits = prefix >= 8 ? 8 : (prefix > 0 ? prefix : 0)
+				mask[i] = bits == 0 ? 0 : 256 - (2 ^ (8 - bits))
+				prefix -= bits
+			}
+			printf "route %s.%s.%s.%s %d.%d.%d.%d\n",
+				$1, $2, $3, $4, mask[1], mask[2], mask[3], mask[4]
+		}
+	'
+}
+
+supported_cipher() {
+	command -v openvpn >/dev/null 2>&1 || return 1
+	openvpn --show-ciphers 2>/dev/null |
+		awk 'NF { print $1 }' |
+		grep -Fxq "$1"
+}
+
+recommended_cipher() {
+	if grep -Eiq '(^|[[:space:]])aes([[:space:]]|$)' /proc/cpuinfo &&
+		supported_cipher 'AES-128-GCM'; then
+		printf '%s\n' 'AES-128-GCM'
+	elif supported_cipher 'CHACHA20-POLY1305'; then
+		printf '%s\n' 'CHACHA20-POLY1305'
+	elif supported_cipher 'AES-128-GCM'; then
+		printf '%s\n' 'AES-128-GCM'
+	else
+		fail '当前OpenVPN没有可用的推荐AEAD算法。'
+	fi
+}
+
+list_ciphers() {
+	local cipher
+	for cipher in CHACHA20-POLY1305 AES-128-GCM AES-256-GCM \
+		AES-128-CBC AES-192-CBC AES-256-CBC \
+		AES-128-CFB AES-192-CFB AES-256-CFB \
+		AES-128-OFB AES-192-OFB AES-256-OFB; do
+		supported_cipher "$cipher" && printf '%s\n' "$cipher"
+	done
+	return 0
+}
+
+supported_lzo() {
+	openvpn --help 2>/dev/null | grep -Eq -- '--(comp-lzo|compress)'
+}
+
+dangerous_config() {
+	awk '
+		function unsafe_path(path) {
+			gsub(/^["\047]|["\047]$/, "", path)
+			return path ~ /^\// || path ~ /^\\/ || path ~ /^[A-Za-z]:[\/\\]/ || path ~ /(^|[\/\\])\.\.([\/\\]|$)/
+		}
+		function forbidden(text, field, key) {
+			if (text == "" || text ~ /^[#;]/) return ""
+			split(text, field, /[[:space:]]+/)
+			key = tolower(field[1])
+			sub(/^--/, "", key)
+			if (key ~ /^(up|down|route-up|ipchange|plugin|script-security|tls-verify|auth-user-pass-verify|client-connect|client-disconnect|learn-address|config|management|management-client|management-client-auth|log|log-append|writepid|chroot|cd|askpass)$/)
+				return key
+			if (key ~ /^(ca|cert|key|tls-auth|tls-crypt|tls-crypt-v2|secret|pkcs12)$/ &&
+				field[2] != "[inline]" && unsafe_path(field[2]))
+				return key
+			return ""
+		}
+		BEGIN { block = "" }
+		{
+			line = $0
+			sub(/^[[:space:]]+/, "", line)
+			if (block != "") {
+				if (tolower(line) == "</" block ">") {
+					block = ""
+				} else if (block !~ /^(ca|cert|key|tls-auth|tls-crypt|secret|pkcs12)$/) {
+					bad = forbidden(line)
+					if (bad != "") { print bad; exit 1 }
+				}
+				next
+			}
+			if (line ~ /^<[A-Za-z0-9_-]+>$/) {
+				block = tolower(substr(line, 2, length(line) - 2))
+				next
+			}
+			bad = forbidden(line)
+			if (bad != "") { print bad; exit 1 }
+		}
+		END {
+			if (block != "") exit 2
+		}
+	' "$1"
+}
+
+validate_extra() {
+	local file="$1" bad
+	[ -s "$file" ] || return 0
+	bad="$(dangerous_config "$file" 2>/dev/null)" ||
+		fail "附加配置包含危险指令或未闭合配置块：${bad:-unknown}"
+}
+
+validate_routes() {
+	local route
+	[ -f "$1" ] || return 0
+	while IFS= read -r route || [ -n "$route" ]; do
+		[ -z "$route" ] && continue
+		valid_cidr "$route" || fail "路由格式无效：$route"
+	done < "$1"
+}
+
+auth_ready() {
+	[ -s "$1" ] || return 1
+	awk 'NR == 1 && length($0) > 0 { user = 1 }
+	     NR == 2 && length($0) > 0 { pass = 1 }
+	     END { exit (user && pass) ? 0 : 1 }' "$1"
+}
+
+reload_openvpn() {
+	/etc/init.d/network reload >/dev/null 2>&1 || true
+	/etc/init.d/firewall reload >/dev/null 2>&1 || true
+	/etc/init.d/openvpn reload >/dev/null 2>&1 ||
+		/etc/init.d/openvpn restart >/dev/null 2>&1 || true
+}
+
+build_active() {
+	local id dir host port proto bind_interface bind_device cipher lzo mtu auth_mode accept_routes
+	local route complete=1
+	id="$1"
+	dir="$(profile_dir "$id")"
+	host="$(uci -q get "$CONFIG.$id.remote_host" || true)"
+	port="$(uci -q get "$CONFIG.$id.remote_port" || printf '1194')"
+	proto="$(uci -q get "$CONFIG.$id.proto" || printf 'udp')"
+	bind_interface="$(uci -q get "$CONFIG.$id.bind_interface" || printf 'auto')"
+	cipher="$(uci -q get "$CONFIG.$id.data_cipher" || printf 'auto')"
+	lzo="$(uci -q get "$CONFIG.$id.lzo" || printf '0')"
+	mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || printf '1400')"
+	auth_mode="$(uci -q get "$CONFIG.$id.auth_mode" || printf 'cert')"
+	accept_routes="$(uci -q get "$CONFIG.$id.accept_routes" || printf '1')"
+
+	[ "$cipher" != 'auto' ] || cipher="$(recommended_cipher)"
+	supported_cipher "$cipher" || fail "本机OpenVPN不支持加密算法$cipher。"
+	[ "$lzo" = '0' ] || supported_lzo || fail '当前OpenVPN未编译LZO压缩支持。'
+	bind_device="$(resolve_bind_device "$bind_interface")"
+
+	[ -s "$dir/ca.crt" ] || complete=0
+	case "$auth_mode" in
+		account) auth_ready "$dir/auth.txt" || complete=0 ;;
+		cert) [ -s "$dir/client.crt" ] && [ -s "$dir/client.key" ] || complete=0 ;;
+		both) auth_ready "$dir/auth.txt" && [ -s "$dir/client.crt" ] && [ -s "$dir/client.key" ] || complete=0 ;;
+	esac
+
+	{
+		printf '%s\n' 'client'
+		printf 'dev tun-c%s\n' "${id#c}"
+		printf '%s\n' 'dev-type tun'
+		printf 'proto %s\n' "$proto"
+		printf 'remote %s %s\n' "$host" "$port"
+		printf '%s\n' 'resolv-retry infinite' 'nobind' 'persist-key' 'persist-tun' 'auth-nocache'
+		printf 'data-ciphers %s\n' "$cipher"
+		printf 'data-ciphers-fallback %s\n' "$cipher"
+		printf 'tun-mtu %s\n' "$mtu"
+		[ -z "$bind_device" ] || printf 'bind-dev %s\n' "$bind_device"
+		[ "$lzo" = '0' ] || printf '%s\n' 'comp-lzo yes'
+		[ "$accept_routes" = '1' ] || printf '%s\n' 'route-nopull'
+		case "$auth_mode" in account|both) printf 'auth-user-pass %s/auth.txt\n' "$dir" ;; esac
+		if [ -s "$dir/extra.conf" ]; then
+			cat "$dir/extra.conf"
+			printf '\n'
+		fi
+		[ ! -s "$dir/routes" ] || while IFS= read -r route || [ -n "$route" ]; do
+			[ -z "$route" ] || cidr_route "$route"
+		done < "$dir/routes"
+		if [ -s "$dir/ca.crt" ]; then
+			printf '%s\n' '<ca>'
+			cat "$dir/ca.crt"
+			printf '\n%s\n' '</ca>'
+		fi
+		case "$auth_mode" in
+			cert|both)
+				if [ -s "$dir/client.crt" ]; then
+					printf '%s\n' '<cert>'
+					cat "$dir/client.crt"
+					printf '\n%s\n' '</cert>'
+				fi
+				if [ -s "$dir/client.key" ]; then
+					printf '%s\n' '<key>'
+					cat "$dir/client.key"
+					printf '\n%s\n' '</key>'
+				fi
+			;;
+		esac
+		printf '%s\n' 'verb 3'
+	} > "$dir/active.ovpn"
+	chmod 0600 "$dir/active.ovpn"
+	uci -q set "$CONFIG.$id.complete=$complete"
+	[ "$complete" = '1' ] || {
+		uci -q set "$CONFIG.$id.enabled=0"
+		uci -q set "openvpn.client_$id.enabled=0"
+	}
+}
+
+save_profile() {
+	local staging="$1" id name host port proto auth_mode bind_interface cipher
+	local lzo mtu accept_routes enabled previous_enabled dir network_section complete username password
+
+	case "$staging" in /tmp/openvpn-client.*) ;; *) fail '临时配置目录无效。' ;; esac
+	[ -d "$staging" ] || fail '临时配置目录不存在。'
+
+	id="$(read_field "$staging" id)"
+	[ -n "$id" ] || id="$(new_id)"
+	valid_id "$id" || fail '客户端配置ID无效。'
+	previous_enabled="$(uci -q get "$CONFIG.$id.enabled" || printf '0')"
+	name="$(read_field "$staging" name)"
+	host="$(read_field "$staging" remote_host)"
+	port="$(read_field "$staging" remote_port)"
+	proto="$(read_field "$staging" proto)"
+	auth_mode="$(read_field "$staging" auth_mode)"
+	bind_interface="$(read_field "$staging" bind_interface)"
+	cipher="$(read_field "$staging" data_cipher)"
+	lzo="$(read_field "$staging" lzo)"
+	mtu="$(read_field "$staging" tun_mtu)"
+	accept_routes="$(read_field "$staging" accept_routes)"
+	enabled="$(read_field "$staging" enabled)"
+
+	[ -n "$port" ] || port='1194'
+	[ -n "$proto" ] || proto='udp'
+	[ -n "$auth_mode" ] || auth_mode='cert'
+	[ -n "$bind_interface" ] || bind_interface='auto'
+	[ -n "$cipher" ] || cipher='auto'
+	[ -n "$lzo" ] || lzo='0'
+	[ -n "$mtu" ] || mtu='1400'
+	[ -n "$accept_routes" ] || accept_routes='1'
+	[ -n "$enabled" ] || enabled='0'
+
+	valid_single_line "$name" 64 || fail '拨号名称不能为空，且不能包含控制字符或竖线。'
+	valid_host "$host" || fail '服务器IP或域名格式无效。'
+	valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '服务器端口无效。'
+	case "$proto" in udp|tcp-client) ;; *) fail '隧道协议无效。' ;; esac
+	case "$auth_mode" in account|cert|both) ;; *) fail '认证方式无效。' ;; esac
+	valid_interface "$bind_interface" || fail '出口线路名称无效。'
+	valid_bool "$lzo" || fail 'LZO选项无效。'
+	[ "$lzo" = '0' ] || supported_lzo || fail '当前OpenVPN未编译LZO压缩支持。'
+	valid_uint "$mtu" && [ "$mtu" -ge 576 ] && [ "$mtu" -le 65535 ] || fail 'MTU必须在576到65535之间。'
+	valid_bool "$accept_routes" || fail '服务器路由推送选项无效。'
+	valid_bool "$enabled" || fail '启用状态无效。'
+	case "$cipher" in
+		auto) ;;
+		BF-*) fail 'BF系列算法已禁用。' ;;
+		*) supported_cipher "$cipher" || fail "本机OpenVPN不支持加密算法$cipher。" ;;
+	esac
+	validate_routes "$staging/routes"
+	validate_extra "$staging/extra.conf"
+	username="$(read_field "$staging" username)"
+	password="$(read_field "$staging" password)"
+	if [ -n "$username" ] && [ -z "$password" ] && [ -s "$BASE_DIR/$id/auth.txt" ]; then
+		password="$(sed -n '2p' "$BASE_DIR/$id/auth.txt")"
+	fi
+	if [ -n "$username" ] || [ -n "$password" ]; then
+		valid_single_line "$username" 128 || fail '用户名格式无效。'
+		[ "${#password}" -le 256 ] && ! printf '%s' "$password" | LC_ALL=C grep -q '[[:cntrl:]]' ||
+			fail '密码格式无效。'
+	fi
+	[ "$cipher" != 'auto' ] || recommended_cipher >/dev/null
+	resolve_bind_device "$bind_interface" >/dev/null
+
+	dir="$(profile_dir "$id")"
+	mkdir -p "$BASE_DIR" "$dir"
+	chmod 0700 "$BASE_DIR" "$dir"
+	for file in ca.crt client.crt client.key extra.conf routes source.ovpn; do
+		if [ -f "$staging/$file" ]; then
+			cp "$staging/$file" "$dir/$file"
+		fi
+	done
+
+	if [ -n "$username" ] || [ -n "$password" ]; then
+		printf '%s\n%s\n' "$username" "$password" > "$dir/auth.txt"
+	elif [ -f "$staging/clear_auth" ]; then
+		rm -f "$dir/auth.txt"
+	fi
+
+	chmod 0600 "$dir"/* 2>/dev/null || true
+
+	uci -q set "$CONFIG.$id=profile"
+	uci -q set "$CONFIG.$id.name=$name"
+	uci -q set "$CONFIG.$id.remote_host=$host"
+	uci -q set "$CONFIG.$id.remote_port=$port"
+	uci -q set "$CONFIG.$id.proto=$proto"
+	uci -q set "$CONFIG.$id.auth_mode=$auth_mode"
+	uci -q set "$CONFIG.$id.bind_interface=$bind_interface"
+	uci -q set "$CONFIG.$id.data_cipher=$cipher"
+	uci -q set "$CONFIG.$id.lzo=$lzo"
+	uci -q set "$CONFIG.$id.tun_mtu=$mtu"
+	uci -q set "$CONFIG.$id.accept_routes=$accept_routes"
+	uci -q set "$CONFIG.$id.enabled=$enabled"
+
+	uci -q set "openvpn.client_$id=openvpn"
+	uci -q set "openvpn.client_$id.config=$dir/active.ovpn"
+	uci -q set "openvpn.client_$id.enabled=$enabled"
+
+	network_section="ovpnc_$id"
+	uci -q set "network.$network_section=interface"
+	uci -q set "network.$network_section.proto=none"
+	uci -q set "network.$network_section.device=tun-c${id#c}"
+	uci -q set "network.$network_section.auto=1"
+	uci -q del_list "firewall.vpn.network=$network_section" >/dev/null 2>&1 || true
+	uci -q add_list "firewall.vpn.network=$network_section"
+
+	build_active "$id"
+	complete="$(uci -q get "$CONFIG.$id.complete" || printf '0')"
+	uci -q commit "$CONFIG"
+	uci -q commit openvpn
+	uci -q commit network
+	uci -q commit firewall
+	if [ "$previous_enabled" = '1' ] || [ "$enabled" = '1' ]; then
+		reload_openvpn
+	fi
+	printf '%s|%s\n' "$id" "$complete"
+}
+
+import_profile() {
+	local source="$1" display_name="${2-}" size clean_size staging result
+	case "$source" in /tmp/openvpn-client-upload.*) ;; *) fail '上传文件路径无效。' ;; esac
+	[ -f "$source" ] || fail '没有收到OVPN文件。'
+	size="$(wc -c < "$source")"
+	[ "$size" -gt 0 ] && [ "$size" -le "$MAX_IMPORT_SIZE" ] ||
+		fail 'OVPN文件为空或超过1MiB限制。'
+	clean_size="$(tr -d '\000' < "$source" | wc -c)"
+	[ "$clean_size" -eq "$size" ] || fail 'OVPN文件包含NUL字符。'
+
+	staging="$(mktemp -d /tmp/openvpn-client.XXXXXX)"
+	case "$staging" in /tmp/openvpn-client.*) ;; *) fail '临时导入目录无效。' ;; esac
+	trap 'rm -rf "$staging"' 0 1 2 15
+	tr -d '\r' < "$source" > "$staging/source.ovpn"
+	chmod 0700 "$staging"
+	chmod 0600 "$staging/source.ovpn"
+	dangerous_config "$staging/source.ovpn" >/dev/null ||
+		fail 'OVPN文件包含危险指令或未闭合配置块。'
+
+	printf '%s\n' "${display_name:-Imported OpenVPN}" > "$staging/name"
+	printf '%s\n' '1194' > "$staging/remote_port"
+	printf '%s\n' 'udp' > "$staging/proto"
+	printf '%s\n' 'cert' > "$staging/auth_mode"
+	printf '%s\n' 'auto' > "$staging/bind_interface"
+	printf '%s\n' 'auto' > "$staging/data_cipher"
+	printf '%s\n' '0' > "$staging/lzo"
+	printf '%s\n' '1400' > "$staging/tun_mtu"
+	printf '%s\n' '1' > "$staging/accept_routes"
+	printf '%s\n' '0' > "$staging/enabled"
+
+	awk -v out="$staging" '
+		function lower(s) { return tolower(s) }
+		function mask_prefix(mask, a, i, value, prefix, seen_zero, parts) {
+			parts = split(mask, a, ".")
+			if (parts != 4) return -1
+			prefix = 0
+			for (i = 1; i <= 4; i++) {
+				value = a[i] + 0
+				if (value == 255 && !seen_zero) prefix += 8
+				else if (value == 254 && !seen_zero) { prefix += 7; seen_zero = 1 }
+				else if (value == 252 && !seen_zero) { prefix += 6; seen_zero = 1 }
+				else if (value == 248 && !seen_zero) { prefix += 5; seen_zero = 1 }
+				else if (value == 240 && !seen_zero) { prefix += 4; seen_zero = 1 }
+				else if (value == 224 && !seen_zero) { prefix += 3; seen_zero = 1 }
+				else if (value == 192 && !seen_zero) { prefix += 2; seen_zero = 1 }
+				else if (value == 128 && !seen_zero) { prefix += 1; seen_zero = 1 }
+				else if (value == 0) seen_zero = 1
+				else return -1
+			}
+			return prefix
+		}
+		BEGIN { block = ""; remote_seen = 0; has_auth = 0 }
+		{
+			raw = $0
+			line = raw
+			sub(/^[[:space:]]+/, "", line)
+			if (block != "") {
+				if (lower(line) == "</" block ">") {
+					if (block != "ca" && block != "cert" && block != "key")
+						print raw >> out "/extra.conf"
+					block = ""
+				} else if (block == "ca") print raw >> out "/ca.crt"
+				else if (block == "cert") print raw >> out "/client.crt"
+				else if (block == "key") print raw >> out "/client.key"
+				else print raw >> out "/extra.conf"
+				next
+			}
+			if (line ~ /^<[A-Za-z0-9_-]+>$/) {
+				block = lower(substr(line, 2, length(line) - 2))
+				if (block != "ca" && block != "cert" && block != "key")
+					print raw >> out "/extra.conf"
+				next
+			}
+			if (line == "" || line ~ /^[#;]/) {
+				print raw >> out "/extra.conf"
+				next
+			}
+			count = split(line, f, /[[:space:]]+/)
+			key = lower(f[1])
+			sub(/^--/, "", key)
+			if (key == "remote" && !remote_seen) {
+				print f[2] > out "/remote_host"
+				if (f[3] != "") print f[3] > out "/remote_port"
+				remote_seen = 1
+			} else if (key == "proto") {
+				value = lower(f[2])
+				if (value == "tcp" || value == "tcp-client") value = "tcp-client"
+				else value = "udp"
+				print value > out "/proto"
+			} else if (key == "cipher") {
+				if (f[2] != "" && f[2] !~ /^BF-/) print f[2] > out "/data_cipher"
+			} else if (key == "data-ciphers") {
+				split(f[2], cipher, ":")
+				if (cipher[1] != "" && cipher[1] !~ /^BF-/) print cipher[1] > out "/data_cipher"
+			} else if (key == "tun-mtu") {
+				print f[2] > out "/tun_mtu"
+			} else if (key == "comp-lzo" || key == "compress") {
+				print "1" > out "/lzo"
+			} else if (key == "auth-user-pass") {
+				has_auth = 1
+			} else if (key == "route-nopull") {
+				print "0" > out "/accept_routes"
+			} else if (key == "route" && f[2] != "") {
+				prefix = f[3] == "" ? 32 : mask_prefix(f[3])
+				if (prefix >= 0) print f[2] "/" prefix >> out "/routes"
+				else print raw >> out "/extra.conf"
+			} else if (key ~ /^(ca|cert|key|dev|dev-type|client|nobind|persist-key|persist-tun|resolv-retry|auth-nocache|data-ciphers-fallback|verb)$/) {
+				next
+			} else {
+				print raw >> out "/extra.conf"
+			}
+		}
+		END {
+			if (has_auth) print "1" > out "/has_auth"
+		}
+	' "$staging/source.ovpn"
+
+	[ -s "$staging/remote_host" ] ||
+		fail 'OVPN文件缺少remote服务器地址。'
+	if [ -s "$staging/has_auth" ]; then
+		if [ -s "$staging/client.crt" ] && [ -s "$staging/client.key" ]; then
+			printf '%s\n' 'both' > "$staging/auth_mode"
+		else
+			printf '%s\n' 'account' > "$staging/auth_mode"
+		fi
+	fi
+	result="$(save_profile "$staging")"
+	rm -rf "$staging"
+	trap - 0 1 2 15
+	printf '%s\n' "$result"
+}
+
+list_profiles() {
+	local id name host port proto enabled complete dir device local_ip state error
+	for id in $(uci -q show "$CONFIG" 2>/dev/null |
+		sed -n "s/^$CONFIG\.\(c[0-9a-f]*\)=profile$/\1/p"); do
+		valid_id "$id" || continue
+		name="$(uci -q get "$CONFIG.$id.name" || true)"
+		host="$(uci -q get "$CONFIG.$id.remote_host" || true)"
+		port="$(uci -q get "$CONFIG.$id.remote_port" || printf '1194')"
+		proto="$(uci -q get "$CONFIG.$id.proto" || printf 'udp')"
+		enabled="$(uci -q get "$CONFIG.$id.enabled" || printf '0')"
+		complete="$(uci -q get "$CONFIG.$id.complete" || printf '0')"
+		dir="$(profile_dir "$id")"
+		device="tun-c${id#c}"
+		local_ip="$(ip -4 -o addr show dev "$device" 2>/dev/null |
+			awk 'NR == 1 { split($4, a, "/"); print a[1] }')"
+		error=''
+		if [ "$complete" != '1' ]; then
+			state='incomplete'
+		elif [ "$enabled" != '1' ]; then
+			state='disabled'
+		elif pgrep -f "openvpn.*$dir/active.ovpn" >/dev/null 2>&1; then
+			state='running'
+		else
+			state='stopped'
+			error='OpenVPN实例未运行，请查看系统日志。'
+		fi
+		printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+			"$id" "$name" "$host" "$port" "$proto" "$device" "${local_ip:--}" "$state" "$error"
+	done
+}
+
+preflight_profile() {
+	local id="$1" dir cipher bind_interface
+	dir="$(profile_dir "$id")"
+	[ "$(uci -q get "$CONFIG.$id.complete" || printf '0')" = '1' ] ||
+		fail "配置$id尚未完善，不能启用。"
+	cipher="$(uci -q get "$CONFIG.$id.data_cipher" || printf 'auto')"
+	[ "$cipher" != 'auto' ] || cipher="$(recommended_cipher)"
+	supported_cipher "$cipher" || fail "本机OpenVPN不支持加密算法$cipher。"
+	bind_interface="$(uci -q get "$CONFIG.$id.bind_interface" || printf 'auto')"
+	resolve_bind_device "$bind_interface" >/dev/null
+	validate_routes "$dir/routes"
+	validate_extra "$dir/extra.conf"
+}
+
+batch_action() {
+	local action="$1" ids="$2" id dir network_section
+	[ -n "$ids" ] || fail '没有选择客户端配置。'
+	OLD_IFS="$IFS"
+	IFS=','
+
+	for id in $ids; do
+		valid_id "$id" && profile_exists "$id" || {
+			IFS="$OLD_IFS"
+			fail '包含无效的客户端配置ID。'
+		}
+		[ "$action" != 'enable' ] || preflight_profile "$id"
+	done
+
+	for id in $ids; do
+		case "$action" in
+			enable)
+				build_active "$id"
+				uci -q set "$CONFIG.$id.enabled=1"
+				uci -q set "openvpn.client_$id.enabled=1"
+			;;
+			disable)
+				uci -q set "$CONFIG.$id.enabled=0"
+				uci -q set "openvpn.client_$id.enabled=0"
+			;;
+			delete)
+				dir="$(profile_dir "$id")"
+				network_section="ovpnc_$id"
+				uci -q del_list "firewall.vpn.network=$network_section" >/dev/null 2>&1 || true
+				uci -q delete "network.$network_section" >/dev/null 2>&1 || true
+				uci -q delete "openvpn.client_$id" >/dev/null 2>&1 || true
+				uci -q delete "$CONFIG.$id" >/dev/null 2>&1 || true
+				rm -rf "$dir"
+			;;
+		esac
+	done
+	IFS="$OLD_IFS"
+	uci -q commit "$CONFIG"
+	uci -q commit openvpn
+	uci -q commit network
+	uci -q commit firewall
+	reload_openvpn
+	printf '操作已完成。\n'
+}
+
+case "$ACTION" in
+	save) save_profile "$ARG" ;;
+	import) import_profile "$ARG" "${3-}" ;;
+	list) list_profiles ;;
+	enable|disable|delete) batch_action "$ACTION" "$ARG" ;;
+	list-ciphers) list_ciphers ;;
+	recommended-cipher) recommended_cipher ;;
+	*) fail '用法：openvpn-client-manager {save|import|list|enable|disable|delete|list-ciphers|recommended-cipher} [参数]' ;;
+esac

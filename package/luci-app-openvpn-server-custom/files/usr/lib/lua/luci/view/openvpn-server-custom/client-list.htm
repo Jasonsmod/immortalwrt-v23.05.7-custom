@@ -1,0 +1,119 @@
+<%+header%>
+<%
+local dispatcher = require "luci.dispatcher"
+local http = require "luci.http"
+local list_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "clients")
+local edit_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "client-edit")
+local action_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "client-action")
+local import_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "client-import")
+local state_labels = {
+	running = "运行中",
+	disabled = "已停用",
+	incomplete = "配置待完善",
+	stopped = "启动失败"
+}
+%>
+
+<div class="cbi-map">
+	<h2 name="content">OpenVPN 客户端配置</h2>
+	<div class="cbi-map-descr">支持多个独立客户端配置。导入的合法未知参数会保留在附加配置中。</div>
+
+	<% if message and #message > 0 then %>
+	<div class="alert-message notice"><%=pcdata(message)%></div>
+	<% end %>
+
+	<div class="cbi-page-actions" style="text-align:left">
+		<a class="btn cbi-button cbi-button-add" href="<%=pcdata(edit_url)%>">添加</a>
+		<form id="ovpn-import-form" method="post" enctype="multipart/form-data"
+			action="<%=pcdata(import_url)%>" style="display:inline">
+			<input type="hidden" name="token" value="<%=token%>" />
+			<input id="ovpn-import-file" type="file" name="ovpn" accept=".ovpn,application/x-openvpn-profile"
+				style="display:none" onchange="this.form.submit()" />
+			<input class="btn cbi-button cbi-button-apply" type="button" value="导入"
+				onclick="document.getElementById('ovpn-import-file').click()" />
+		</form>
+		<input class="btn cbi-button cbi-button-apply" type="button" value="启用"
+			onclick="submitClientAction('enable')" />
+		<input class="btn cbi-button cbi-button-reset" type="button" value="停用"
+			onclick="submitClientAction('disable')" />
+		<input class="btn cbi-button cbi-button-remove" type="button" value="删除"
+			onclick="submitClientAction('delete')" />
+	</div>
+
+	<form id="client-action-form" method="post" action="<%=pcdata(action_url)%>">
+		<input type="hidden" name="token" value="<%=token%>" />
+		<input id="client-action" type="hidden" name="action" value="" />
+		<fieldset class="cbi-section">
+			<div class="table cbi-section-table">
+				<div class="tr table-titles">
+					<div class="th">拨号名称</div>
+					<div class="th">服务器 IP/域名</div>
+					<div class="th">服务器端口</div>
+					<div class="th">隧道协议</div>
+					<div class="th">隧道类型</div>
+					<div class="th">本地 IP</div>
+					<div class="th">状态</div>
+					<div class="th">操作</div>
+					<div class="th"><input id="select-all" type="checkbox" onclick="toggleAll(this.checked)" /></div>
+				</div>
+				<% if #profiles == 0 then %>
+				<div class="tr"><div class="td" style="text-align:center" colspan="9">暂无数据</div></div>
+				<% else %>
+				<% for _, profile in ipairs(profiles) do %>
+				<div class="tr">
+					<div class="td"><%=pcdata(profile.name)%></div>
+					<div class="td"><%=pcdata(profile.host)%></div>
+					<div class="td"><%=pcdata(profile.port)%></div>
+					<div class="td"><%=profile.proto == "tcp-client" and "TCP" or "UDP"%></div>
+					<div class="td">TUN</div>
+					<div class="td"><%=pcdata(profile.local_ip)%></div>
+					<div class="td" title="<%=pcdata(profile.error or "")%>"><%=pcdata(state_labels[profile.state] or profile.state)%></div>
+					<div class="td">
+						<a href="<%=pcdata(edit_url)%>?id=<%=http.urlencode(profile.id)%>">编辑</a>
+						<% if profile.state == "running" then %>
+						<a href="javascript:void(0)" onclick="submitOne('disable','<%=profile.id%>')">停用</a>
+						<% else %>
+						<a href="javascript:void(0)" onclick="submitOne('enable','<%=profile.id%>')">启用</a>
+						<% end %>
+						<a href="javascript:void(0)" onclick="submitOne('delete','<%=profile.id%>')">删除</a>
+					</div>
+					<div class="td"><input class="client-select" id="selected-<%=profile.id%>"
+						type="checkbox" name="selected.<%=profile.id%>" value="1" /></div>
+				</div>
+				<% end %>
+				<% end %>
+			</div>
+		</fieldset>
+	</form>
+	<div class="cbi-map-descr">共 <%=#profiles%> 条配置</div>
+</div>
+
+<script type="text/javascript">
+function toggleAll(checked) {
+	var boxes = document.querySelectorAll('.client-select');
+	for (var i = 0; i < boxes.length; i++)
+		boxes[i].checked = checked;
+}
+
+function selectedCount() {
+	return document.querySelectorAll('.client-select:checked').length;
+}
+
+function submitClientAction(action) {
+	if (selectedCount() === 0) {
+		alert('请至少选择一个客户端配置。');
+		return;
+	}
+	if (action === 'delete' && !confirm('确定删除所选客户端配置及其私钥文件吗？'))
+		return;
+	document.getElementById('client-action').value = action;
+	document.getElementById('client-action-form').submit();
+}
+
+function submitOne(action, id) {
+	toggleAll(false);
+	document.getElementById('selected-' + id).checked = true;
+	submitClientAction(action);
+}
+</script>
+<%+footer%>

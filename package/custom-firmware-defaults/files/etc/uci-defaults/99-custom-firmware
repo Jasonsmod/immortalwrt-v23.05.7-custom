@@ -11,6 +11,17 @@ set luci.main.mediaurlbase='/luci-static/argon'
 EOF
 
 uci -q commit network
+DISTRIB_TARGET=''
+[ -r /etc/openwrt_release ] && . /etc/openwrt_release
+case "$DISTRIB_TARGET" in
+	ipq40xx/generic)
+		uci -q set dhcp.lan.ignore='0'
+		;;
+	x86/generic|x86/64)
+		uci -q set dhcp.lan.ignore='1'
+		;;
+esac
+uci -q commit dhcp
 uci -q commit system
 uci -q commit luci
 

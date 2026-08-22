@@ -2,6 +2,13 @@
 
 set -eu
 
+if ! uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1 &&
+	! uci -q get openvpn.custom_server.data_ciphers >/dev/null 2>&1; then
+	data_cipher="$(/usr/libexec/openvpn-server-manager recommended-cipher)"
+	uci -q set "openvpn_server.main.data_cipher=$data_cipher"
+	uci -q commit openvpn_server
+fi
+
 if ! uci -q get network.vpn0 >/dev/null; then
 	uci -q batch <<'EOF'
 set network.vpn0=interface

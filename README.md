@@ -126,6 +126,3 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
 </table>
 
 
-[2026-08-21] 修复 | 模块：MOSDNS 与 R619AC | 内容：修复 MOSDNS LuCI 页面资源被误删的问题，并增加 R619AC 刷机镜像结构和设备元数据校验。
-
-[2026-08-22] 新增 | 模块：OpenVPN Server 与构建信息 | 内容：新增安全证书管理 GUI、vpn0/wg0、推荐防火墙规则，并在 LuCI 首页显示北京时间编译日期。

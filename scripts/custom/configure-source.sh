@@ -5,6 +5,7 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TOPDIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 LUCI_COLLECTIONS="$TOPDIR/feeds/luci/collections"
+DNSMASQ_CONF="$TOPDIR/package/network/services/dnsmasq/files/dnsmasq.conf"
 
 [ -d "$LUCI_COLLECTIONS" ] || {
 	printf '错误：请先执行 feeds update/install。\n' >&2
@@ -12,7 +13,8 @@ LUCI_COLLECTIONS="$TOPDIR/feeds/luci/collections"
 }
 
 sed -i 's/192.168.1.1/192.168.50.1/g' "$TOPDIR/package/base-files/files/bin/config_generate"
-sed -i '9i conf-dir=/etc/dnsmasq.d' "$TOPDIR/package/network/services/dnsmasq/files/dnsmasq.conf"
+sed -i '\|^conf-dir=/etc/dnsmasq.d$|d' "$DNSMASQ_CONF"
+printf 'conf-dir=/etc/dnsmasq.d\n' >> "$DNSMASQ_CONF"
 
 # Bootstrap 可能由 luci-light 等间接集合引入，需要检查所有 LuCI collections。
 find "$LUCI_COLLECTIONS" -type f -name Makefile \

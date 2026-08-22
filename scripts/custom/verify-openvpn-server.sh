@@ -7,6 +7,12 @@ TOPDIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_DIR="$TOPDIR/package/luci-app-openvpn-server-custom"
 DEFAULTS="$PACKAGE_DIR/files/etc/uci-defaults/90-openvpn-server-custom"
 MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-server-manager"
+CLIENT_MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-client-manager"
+CONTROLLER="$PACKAGE_DIR/files/usr/lib/lua/luci/controller/openvpn_server_custom.lua"
+SERVER_MODEL="$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua"
+ACTIONS_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/server-actions.htm"
+CLIENT_LIST_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-list.htm"
+CLIENT_EDIT_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-edit.htm"
 ERRORS=0
 
 fail_check() {
@@ -25,12 +31,16 @@ require_text() {
 for file in \
 	"$PACKAGE_DIR/Makefile" \
 	"$PACKAGE_DIR/files/etc/config/openvpn_server" \
+	"$PACKAGE_DIR/files/etc/config/openvpn_client_custom" \
 	"$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" \
 	"$DEFAULTS" \
 	"$MANAGER" \
-	"$PACKAGE_DIR/files/usr/lib/lua/luci/controller/openvpn_server_custom.lua" \
-	"$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua" \
-	"$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/clients.lua"
+	"$CLIENT_MANAGER" \
+	"$CONTROLLER" \
+	"$SERVER_MODEL" \
+	"$ACTIONS_TEMPLATE" \
+	"$CLIENT_LIST_TEMPLATE" \
+	"$CLIENT_EDIT_TEMPLATE"
 do
 	require_file "$file"
 done
@@ -41,6 +51,7 @@ fi
 
 sh -n "$DEFAULTS" || fail_check 'OpenVPN网络初始化脚本语法无效。'
 sh -n "$MANAGER" || fail_check 'OpenVPN证书管理脚本语法无效。'
+sh -n "$CLIENT_MANAGER" || fail_check 'OpenVPN客户端管理脚本语法无效。'
 
 require_text "$DEFAULTS" "set network.vpn0.device='tun0'"
 require_text "$DEFAULTS" "set network.wg0.proto='wireguard'"
@@ -48,10 +59,64 @@ require_text "$DEFAULTS" "set firewall.vpn.input='ACCEPT'"
 require_text "$DEFAULTS" "set firewall.lan_to_vpn.dest='vpn'"
 require_text "$DEFAULTS" "set firewall.vpn_to_lan.dest='lan'"
 require_text "$DEFAULTS" "set firewall.vpn_to_wan.dest='wan'"
-require_text "$MANAGER" "set openvpn.\$OPENVPN_SECTION.tls_version_min='1.2'"
+require_text "$MANAGER" "set_openvpn_default tls_version_min '1.2'"
 require_text "$MANAGER" 'valid_client_name'
+require_text "$MANAGER" 'recommended_data_cipher'
+require_text "$MANAGER" 'CHACHA20-POLY1305'
+require_text "$MANAGER" 'AES-128-GCM'
+require_text "$MANAGER" 'set_openvpn_default'
+require_text "$MANAGER" 'replace_managed_push'
+require_text "$MANAGER" 'data_ciphers_fallback'
+require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_crypt"'
+require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_auth"'
+require_text "$DEFAULTS" 'recommended-cipher'
+require_text "$SERVER_MODEL" 'if not pki_ready then'
+require_text "$SERVER_MODEL" 'list-ciphers'
+require_text "$ACTIONS_TEMPLATE" '导出 Windows 客户端配置'
+require_text "$ACTIONS_TEMPLATE" 'if not self.pki_ready then'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-server-manager'
+require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-client-manager'
+require_text "$PACKAGE_DIR/Makefile" 'openvpn_client_custom'
+require_text "$PACKAGE_DIR/Makefile" 'client-list.htm'
+require_text "$PACKAGE_DIR/Makefile" 'client-edit.htm'
+require_text "$PACKAGE_DIR/Makefile" 'server-actions.htm'
 require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/server/'
+require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/client-custom/'
+require_text "$CONTROLLER" 'post("client_save")'
+require_text "$CONTROLLER" 'post("client_action")'
+require_text "$CONTROLLER" 'dispatcher.test_post_security()'
+require_text "$CONTROLLER" 'http.setfilehandler'
+require_text "$CONTROLLER" 'post("server_export")'
+require_text "$CLIENT_LIST_TEMPLATE" '添加'
+require_text "$CLIENT_LIST_TEMPLATE" '导入'
+require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('enable')"
+require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('disable')"
+require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('delete')"
+require_text "$CLIENT_EDIT_TEMPLATE" '附加配置'
+require_text "$CLIENT_EDIT_TEMPLATE" '服务器路由推送'
+require_text "$CLIENT_MANAGER" 'dangerous_config'
+require_text "$CLIENT_MANAGER" 'MAX_IMPORT_SIZE=1048576'
+require_text "$CLIENT_MANAGER" 'chmod 0600'
+require_text "$CLIENT_MANAGER" 'enable|disable|delete'
+require_text "$CLIENT_MANAGER" 'openvpn.client_$id.config'
+require_text "$CLIENT_MANAGER" 'bind-dev'
+require_text "$CLIENT_MANAGER" 'BF-*'
+
+if grep -Fq 'clients.lua' "$PACKAGE_DIR/Makefile"; then
+	fail_check '旧客户端证书页面不应继续安装。'
+fi
+
+if grep -Fq 'delete "openvpn.$OPENVPN_SECTION"' "$MANAGER"; then
+	fail_check '保存服务端配置时不允许删除整个OpenVPN配置段。'
+fi
+
+if grep -ERqs 'BF-(CBC|CFB|OFB)' "$PACKAGE_DIR"; then
+	fail_check 'OpenVPN Server软件包中不允许提供BF加密算法。'
+fi
+
+if grep -Eqs 'TLS_CRYPT_KEY|--genkey|<tls-crypt>|<tls-auth>' "$MANAGER"; then
+	fail_check 'OpenVPN Server不应生成或下发tls-auth/tls-crypt静态密钥。'
+fi
 
 if grep -Rqs --include='*' '0777' "$PACKAGE_DIR"; then
 	fail_check 'OpenVPN Server软件包中不允许使用0777权限。'
@@ -74,4 +139,4 @@ if [ "$ERRORS" -ne 0 ]; then
 	exit 1
 fi
 
-printf 'OpenVPN Server GUI、证书权限、VPN接口和防火墙方向校验通过。\n'
+printf 'OpenVPN服务端、多客户端GUI、OVPN导入、令牌和权限校验通过。\n'
