@@ -35,11 +35,9 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 |---|---|
 | Web/SSH 地址 | `192.168.50.1` |
 | 用户名 | `root` |
-| 密码 | `password`（固件内保存为密码哈希） |
+| 密码 | `password` |
 | LuCI 主题 | Argon |
 | opkg 镜像 | `https://mirrors.vsean.net/openwrt` |
-| DNS/DHCP | `dnsmasq-full` |
-| TCP 拥塞控制 | BBR |
 
 
 ## Download
