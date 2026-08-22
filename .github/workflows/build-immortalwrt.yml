@@ -155,7 +155,7 @@ jobs:
             target="${artifact_dir##*-23.05.7-}"
             case "$target" in
               r619ac) expected=4 ;;
-              x86|x86_64) expected=5 ;;
+              x86|x86_64) expected=4 ;;
               *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
             esac
 
@@ -164,8 +164,8 @@ jobs:
               name="$(basename "$file")"
               case "$target:$name" in
                 r619ac:*factory.ubi|r619ac:*sysupgrade.bin|r619ac:sha256sums|r619ac:*version.buildinfo) ;;
-                x86:*squashfs-combined.img|x86:*squashfs-combined.img.gz|x86:*squashfs-combined-efi.img.gz|x86:sha256sums|x86:*version.buildinfo) ;;
-                x86_64:*squashfs-combined.img|x86_64:*squashfs-combined.img.gz|x86_64:*squashfs-combined-efi.img.gz|x86_64:sha256sums|x86_64:*version.buildinfo) ;;
+                x86:*squashfs-combined.img.gz|x86:*squashfs-combined-efi.img.gz|x86:sha256sums|x86:*version.buildinfo) ;;
+                x86_64:*squashfs-combined.img.gz|x86_64:*squashfs-combined-efi.img.gz|x86_64:sha256sums|x86_64:*version.buildinfo) ;;
                 *) echo "拒绝发布非白名单文件：$file" >&2; exit 1 ;;
               esac
               destination="release-assets/${target}-${name}"

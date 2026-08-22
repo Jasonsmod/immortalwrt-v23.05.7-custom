@@ -48,12 +48,11 @@ case "$target" in
 		expected=4
 		;;
 	x86|x86_64)
-		copy_one 'squashfs-combined.img' '*-squashfs-combined.img'
 		copy_one 'squashfs-combined.img.gz' '*-squashfs-combined.img.gz'
 		copy_one 'squashfs-combined-efi.img.gz' '*-squashfs-combined-efi.img.gz'
 		copy_one 'sha256sums' 'sha256sums'
 		copy_one 'version.buildinfo' '*version.buildinfo'
-		expected=5
+		expected=4
 		;;
 esac
 
