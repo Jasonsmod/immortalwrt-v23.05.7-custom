@@ -39,51 +39,8 @@ R619AC 不构建 64M 版本。x86 和 x86_64 的根文件系统分区默认设�
 | LuCI 主题 | Argon |
 | opkg 镜像 | `https://mirrors.vsean.net/openwrt` |
 | DNS/DHCP | `dnsmasq-full` |
-| TCP 拥塞控制 | BBR，默认队列规则为 FQ |
-| 固件版本 | LuCI 首页显示北京时间编译日期 |
+| TCP 拥塞控制 | BBR |
 
-默认设置由 `custom-firmware-defaults` 包在首次启动时应用。软件源的具体架构路径仍由 ImmortalWrt 构建系统按照目标自动生成。
-
-## 默认应用 ✅ 已完成
-
-- PassWall：`luci-app-passwall` 及其依赖。
-- OpenClash：`luci-app-openclash` 及其依赖。
-- MOSDNS：`luci-app-mosdns`、`mosdns`、`v2dat`。
-- WireGuard：LuCI 协议、工具和内核模块。
-- OpenVPN 服务端/客户端：LuCI、OpenSSL 版本、Easy-RSA、TUN 和证书工具。
-- MultiWAN：`luci-app-mwan3`、`mwan3`。
-- 网络唤醒：`luci-app-wol`、`etherwake`。
-- KMS：`luci-app-vlmcsd`、`vlmcsd`。
-- 动态 DNS：LuCI、DDNS Scripts 和阿里云服务脚本。
-- BBR：`kmod-tcp-bbr` 和 FQ 调度支持。
-
-## OpenVPN Server GUI ✅ 已完成
-
-- 在“VPN → OpenVPN 服务器”中配置服务端协议、端口、网段、DNS 和公网地址。
-- 通过 Easy-RSA 独立生成 CA、服务器证书和客户端证书，不携带公共默认私钥。
-- 支持在 LuCI 中生成、吊销客户端证书并下载内嵌证书的 `.ovpn`。
-- 默认创建 `vpn0`（绑定 `tun0`）和待配置的 `wg0` 接口。
-- VPN 防火墙允许 `LAN ↔ VPN` 和 `VPN → WAN`，WAN 仅开放 OpenVPN 服务端口。
-
-## 本地编译流程 ✅ 已完成
-
-必须在大小写敏感的 Linux 文件系统中编译，源码路径不得包含空格或非 ASCII 字符。Windows 用户应将仓库放入 WSL2 的 Linux 文件系统，而不是直接在 NTFS 项目目录中编译。
-
-```bash
-bash scripts/custom/restore-symlinks.sh
-./scripts/feeds update -a
-./scripts/feeds install -a
-bash scripts/custom/prepare-packages.sh
-bash scripts/custom/configure-source.sh
-bash scripts/custom/check-package-conflicts.sh
-bash scripts/custom/select-config.sh r619ac   # 或 x86、x86_64
-bash scripts/custom/verify-config.sh r619ac
-bash scripts/custom/verify-openvpn-server.sh
-make download -j8
-make -j"$(nproc)" || make -j1 V=s
-```
-
-构建结果位于 `bin/targets/`。
 
 ## Download
 Built firmware images are available for many architectures and come with a package selection to be used as WiFi home router. To quickly find a factory image usable to migrate from a vendor stock firmware to ImmortalWrt, try the *Firmware Selector*.
@@ -170,9 +127,6 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
   </tr>
 </table>
 
-[2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：x86 和 x86_64 仅保留 squashfs-combined 镜像、sha256sums 与 version.buildinfo。
-
-[2026-08-21] 修改 | 模块：GitHub Release 发布 | 内容：R619AC 仅保留 factory.ubi、sysupgrade.bin、sha256sums 与 version.buildinfo。
 
 [2026-08-21] 修复 | 模块：MOSDNS 与 R619AC | 内容：修复 MOSDNS LuCI 页面资源被误删的问题，并增加 R619AC 刷机镜像结构和设备元数据校验。
 
