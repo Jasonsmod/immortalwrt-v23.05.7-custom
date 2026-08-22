@@ -1,0 +1,177 @@
+#!/usr/bin/env lua
+
+local jsonc = require "luci.jsonc"
+local sys = require "luci.sys"
+local util = require "luci.util"
+
+local function parse_json(command)
+	local output = sys.exec(command .. " 2>/dev/null")
+	if not output or #output == 0 then
+		return nil
+	end
+
+	local ok, value = pcall(jsonc.parse, output)
+	return ok and value or nil
+end
+
+local function valid_mac(mac)
+	return type(mac) == "string" and mac:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
+end
+
+local function normalize_mac(mac)
+	return string.upper(mac or "")
+end
+
+local function add_source(device, source)
+	for _, existing in ipairs(device.source) do
+		if existing == source then
+			return
+		end
+	end
+
+	device.source[#device.source + 1] = source
+end
+
+local function add_device(devices, by_mac, mac, ip, interface, device_type, state, source, hostname)
+	if not valid_mac(mac) then
+		return
+	end
+
+	mac = normalize_mac(mac)
+	local device = by_mac[mac]
+	if not device then
+		device = {
+			ip = ip or "",
+			mac = mac,
+			interface = interface or "",
+			type = device_type or "lan",
+			state = state or "unknown",
+			hostname = hostname or "",
+			source = {}
+		}
+		by_mac[mac] = device
+		devices[#devices + 1] = device
+	else
+		if device.ip == "" and ip and ip ~= "" then
+			device.ip = ip
+		end
+		if hostname and hostname ~= "" and device.hostname == "" then
+			device.hostname = hostname
+		end
+		if device_type == "wifi" then
+			device.type = "wifi"
+			device.interface = interface or device.interface
+			device.state = "associated"
+		elseif device.interface == "" then
+			device.interface = interface or ""
+		end
+		if state == "reachable" or state == "associated" then
+			device.state = state
+		end
+	end
+
+	add_source(device, source)
+end
+
+local function collect_network_devices()
+	local allowed = {}
+	local excluded = {}
+	local dump = parse_json("ubus call network.interface dump")
+
+	if dump and type(dump.interface) == "table" then
+		for _, interface in ipairs(dump.interface) do
+			local name = interface.interface or ""
+			local l3_device = interface.l3_device or interface.device
+
+			if l3_device and l3_device ~= "" then
+				if name == "wan" or name:match("^wan") or name == "loopback" then
+					excluded[l3_device] = true
+				elseif name == "lan" or name:match("^lan") or l3_device:match("^br%-") then
+					allowed[l3_device] = true
+				end
+			end
+		end
+	end
+
+	if next(allowed) == nil then
+		allowed["br-lan"] = true
+	end
+
+	return allowed, excluded
+end
+
+local function collect_wifi_interfaces()
+	local interfaces = {}
+	local state = parse_json("ubus call network.wireless status")
+
+	if not state then
+		return interfaces
+	end
+
+	for _, radio in pairs(state) do
+		if type(radio) == "table" and type(radio.interfaces) == "table" then
+			for _, interface in ipairs(radio.interfaces) do
+				if type(interface) == "table" and interface.ifname and interface.ifname ~= "" then
+					interfaces[interface.ifname] = true
+				end
+			end
+		end
+	end
+
+	return interfaces
+end
+
+local function collect_devices()
+	local devices = {}
+	local by_mac = {}
+	local allowed, excluded = collect_network_devices()
+
+	for line in sys.exec("ip -4 neigh show"):gmatch("[^\r\n]+") do
+		local ip, interface, mac, state = line:match("^(%S+)%s+dev%s+(%S+).-[Ll][Ll]addr%s+(%S+)%s+(%S+)")
+		if ip and interface and mac and not excluded[interface] and
+			(allowed[interface] or interface:match("^br%-")) then
+			if state ~= "FAILED" and state ~= "INCOMPLETE" then
+				add_device(devices, by_mac, mac, ip, interface, "lan", string.lower(state), "neighbor")
+			end
+		end
+	end
+
+	local lan_interface = next(allowed) or "br-lan"
+	local leases = io.open("/tmp/dhcp.leases", "r")
+	if leases then
+		for line in leases:lines() do
+			local _, mac, ip, hostname = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+			if ip and ip ~= "*" then
+				add_device(devices, by_mac, mac, ip, lan_interface, "lan", "dhcp", "dhcp", hostname)
+			end
+		end
+		leases:close()
+	end
+
+	for interface in pairs(collect_wifi_interfaces()) do
+		local args = util.shellquote(jsonc.stringify({ device = interface }))
+		local result = parse_json("ubus call iwinfo assoclist " .. args)
+		if result and type(result.results) == "table" then
+			for _, client in ipairs(result.results) do
+				local mac = client.mac or client.addr
+				add_device(devices, by_mac, mac, nil, interface, "wifi", "associated", "wifi")
+			end
+		end
+	end
+
+	table.sort(devices, function(a, b)
+		local aip = a.ip ~= "" and a.ip or "~"
+		local bip = b.ip ~= "" and b.ip or "~"
+		return aip == bip and a.mac < b.mac or aip < bip
+	end)
+
+	return devices
+end
+
+if arg[1] == "list" then
+	print('{"getDevices":{}}')
+elseif arg[1] == "call" and arg[2] == "getDevices" then
+	print(jsonc.stringify({ devices = collect_devices() }))
+else
+	os.exit(1)
+end

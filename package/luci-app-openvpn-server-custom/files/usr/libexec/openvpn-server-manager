@@ -16,6 +16,10 @@ export EASYRSA_BATCH=1
 
 umask 077
 
+OPENVPN_CONFIG="$OPENVPN_DIR/custom_server.conf"
+ACCOUNT_DB='/etc/openvpn/server-accounts'
+AUTH_SCRIPT='/usr/libexec/openvpn-server-auth'
+
 fail() {
 	printf '错误：%s\n' "$*" >&2
 	exit 1
@@ -66,16 +70,15 @@ SEED-OFB
 SEED-CFB'
 
 supported_data_cipher() {
-	command -v openvpn >/dev/null 2>&1 || return 1
-	openvpn --show-ciphers 2>/dev/null |
-		awk 'NF { print $1 }' |
-		grep -Fxq "$1"
+	list_data_ciphers | grep -Fxq "$1"
 }
 
 list_data_ciphers() {
-	local cipher
+	local supported cipher
+	command -v openvpn >/dev/null 2>&1 || return 1
+	supported="$(openvpn --show-ciphers 2>/dev/null | awk 'NF { print $1 }')"
 	for cipher in $DATA_CIPHERS; do
-		supported_data_cipher "$cipher" && printf '%s\n' "$cipher"
+		printf '%s\n' "$supported" | grep -Fxq "$cipher" && printf '%s\n' "$cipher"
 	done
 	return 0
 }
@@ -160,6 +163,121 @@ valid_remote_host() {
 		*) return 0 ;;
 	esac
 }
+valid_cidr() {
+    local route network prefix
+    route="$1"
+    case "$route" in
+        */*)
+            network="${route%%/*}"
+            prefix="${route#*/}"
+            valid_ipv4 "$network" || return 1
+            valid_uint "$prefix" && [ "$prefix" -le 32 ] || return 1
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+prefix_to_netmask() {
+    awk -v prefix="$1" 'BEGIN {
+        value = prefix
+        for (i = 1; i <= 4; i++) {
+            if (value >= 8) { octet = 255; value -= 8 }
+            else if (value > 0) { octet = 256 - (2 ^ (8 - value)); value = 0 }
+            else octet = 0
+            printf "%s%s", (i == 1 ? "" : "."), octet
+        }
+        printf "\n"
+    }'
+}
+
+valid_auth_mode() {
+    case "$1" in account|cert|both) return 0 ;; *) return 1 ;; esac
+}
+
+valid_tunnel_type() {
+    case "$1" in tun|tap) return 0 ;; *) return 1 ;; esac
+}
+
+valid_boolean() {
+    case "$1" in 0|1) return 0 ;; *) return 1 ;; esac
+}
+
+valid_account_username() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_.-]*|?????????????????????????????????*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+password_hash() {
+    printf '%s' "$1:$2" | sha256sum | awk '{ print $1 }'
+}
+
+random_salt() {
+    od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+validate_extra_config() {
+    local extra="$1"
+    [ -z "$extra" ] && return 0
+    printf '%s\n' "$extra" | awk '
+        {
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            if (line == "" || line ~ /^[#;]/) next
+            if (line ~ /^</ || line ~ /^>/) { print "inline block"; exit 1 }
+            split(line, field, /[[:space:]]+/)
+            key = tolower(field[1])
+            sub(/^--/, "", key)
+            if (key ~ /^(config|management|plugin|script-security|auth-user-pass-verify|client-connect|client-disconnect|tls-verify|up|down|route-up|ipchange|learn-address|dev|dev-type|proto|port|server|server-bridge|ca|cert|key|dh|crl-verify|user|group|tls-auth|tls-crypt|secret)$/) {
+                print key
+                exit 1
+            }
+        }
+    '
+}
+
+list_configured_routes() {
+    uci -q show openvpn_server.main.push_route 2>/dev/null |
+        sed -n "s/^openvpn_server\\.main\\.push_route='\\(.*\\)'$/\\1/p"
+}
+
+find_account_section() {
+    local wanted="$1" section username
+    ACCOUNT_SECTION=''
+    for section in $(uci -q show openvpn_server 2>/dev/null |
+        sed -n 's/^openvpn_server\.\([^.=]*\)\.username=.*/\1/p'); do
+        username="$(uci -q get "openvpn_server.$section.username" || true)"
+        if [ "$username" = "$wanted" ]; then
+            ACCOUNT_SECTION="$section"
+            return 0
+        fi
+    done
+    return 1
+}
+
+sync_accounts() {
+    local temp section username salt hash
+    mkdir -p /etc/openvpn
+    temp="$(mktemp /etc/openvpn/server-accounts.XXXXXX)"
+    chmod 0600 "$temp"
+    for section in $(uci -q show openvpn_server 2>/dev/null |
+        sed -n 's/^openvpn_server\.\([^.=]*\)\.username=.*/\1/p'); do
+        username="$(uci -q get "openvpn_server.$section.username" || true)"
+        salt="$(uci -q get "openvpn_server.$section.salt" || true)"
+        hash="$(uci -q get "openvpn_server.$section.password_hash" || true)"
+        valid_account_username "$username" || continue
+        [ -n "$salt" ] && [ -n "$hash" ] || continue
+        printf '%s:%s:%s\n' "$username" "$salt" "$hash" >> "$temp"
+    done
+    chmod 0640 "$temp"
+    chown root:nogroup "$temp" 2>/dev/null || true
+    mv -f "$temp" "$ACCOUNT_DB"
+}
+
+accounts_ready() {
+    [ -s "$ACCOUNT_DB" ]
+}
 
 pki_ready() {
 	[ -s "$PKI_DIR/ca.crt" ] && \
@@ -184,96 +302,240 @@ reload_services() {
 	/etc/init.d/openvpn restart >/dev/null 2>&1 || true
 }
 
+render_server_config() {
+    local proto="$1" port="$2" tunnel_type="$3" tunnel_device="$4"
+    local vpn_network="$5" vpn_netmask="$6" max_clients="$7"
+    local lan_network="$8" lan_netmask="$9" client_dns="${10}"
+    local data_cipher="${11}" lzo="${12}" auth_mode="${13}" extra_config="${14}"
+    local route route_network prefix route_netmask config_tmp
+
+    config_tmp="$OPENVPN_CONFIG.tmp.$$"
+    {
+        printf 'proto %s\n' "$proto"
+        printf 'port %s\n' "$port"
+        printf 'dev %s\n' "$tunnel_device"
+        printf 'dev-type %s\n' "$tunnel_type"
+        printf 'topology subnet\n'
+        printf 'server %s %s\n' "$vpn_network" "$vpn_netmask"
+        printf 'max-clients %s\n' "$max_clients"
+        printf 'ca %s\n' "$PKI_DIR/ca.crt"
+        printf 'cert %s\n' "$PKI_DIR/issued/server.crt"
+        printf 'key %s\n' "$PKI_DIR/private/server.key"
+        printf 'dh none\n'
+        printf 'crl-verify %s\n' "$PKI_DIR/crl.pem"
+        printf 'tls-version-min 1.2\n'
+        printf 'auth SHA256\n'
+        printf 'keepalive 10 120\n'
+        printf 'persist-key\n'
+        printf 'persist-tun\n'
+        printf 'client-to-client\n'
+        printf 'user nobody\n'
+        printf 'group nogroup\n'
+        printf 'status /var/run/openvpn-server.status\n'
+        printf 'verb 3\n'
+        [ -z "$data_cipher" ] || {
+            printf 'data-ciphers %s\n' "$data_cipher"
+            printf 'data-ciphers-fallback %s\n' "$data_cipher"
+        }
+        [ "$lzo" = '1' ] && printf 'comp-lzo yes\n'
+        case "$auth_mode" in
+            account|both)
+                printf 'auth-user-pass-verify %s via-file\n' "$AUTH_SCRIPT"
+                printf 'script-security 2\n'
+                printf 'username-as-common-name\n'
+                ;;
+        esac
+        [ "$auth_mode" = 'account' ] && printf 'verify-client-cert none\n'
+        printf 'push "route %s %s"\n' "$lan_network" "$lan_netmask"
+        printf 'push "dhcp-option DNS %s"\n' "$client_dns"
+        printf 'push "redirect-gateway def1 bypass-dhcp"\n'
+        while IFS= read -r route || [ -n "$route" ]; do
+            [ -z "$route" ] && continue
+            route_network="${route%%/*}"
+            prefix="${route#*/}"
+            route_netmask="$(prefix_to_netmask "$prefix")"
+            printf 'push "route %s %s"\n' "$route_network" "$route_netmask"
+        done <<EOF_ROUTES
+$(list_configured_routes)
+EOF_ROUTES
+        if [ -n "$extra_config" ]; then
+            printf '\n# 用户附加配置\n%s\n' "$extra_config"
+        fi
+    } > "$config_tmp"
+    chmod 0600 "$config_tmp"
+    mv -f "$config_tmp" "$OPENVPN_CONFIG"
+}
+
 apply_configuration() {
-	local enabled proto port remote_host vpn_network vpn_netmask
-	local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
+    local enabled proto port remote_host vpn_network vpn_netmask
+    local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
+    local auth_mode tunnel_type tunnel_device lzo extra_config route
 
-	enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
-	proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
-	port="$(uci -q get openvpn_server.main.port || printf '1194')"
-	remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
-	vpn_network="$(uci -q get openvpn_server.main.vpn_network || printf '10.8.0.0')"
-	vpn_netmask="$(uci -q get openvpn_server.main.vpn_netmask || printf '255.255.255.0')"
-	lan_network="$(uci -q get openvpn_server.main.lan_network || printf '192.168.50.0')"
-	lan_netmask="$(uci -q get openvpn_server.main.lan_netmask || printf '255.255.255.0')"
-	client_dns="$(uci -q get openvpn_server.main.client_dns || printf '192.168.50.1')"
-	max_clients="$(uci -q get openvpn_server.main.max_clients || printf '10')"
-	data_cipher=''
-	if uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1; then
-		data_cipher="$(configured_data_cipher)"
-	fi
+    enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
+    proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
+    port="$(uci -q get openvpn_server.main.port || printf '1194')"
+    remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
+    vpn_network="$(uci -q get openvpn_server.main.vpn_network || printf '10.8.0.0')"
+    vpn_netmask="$(uci -q get openvpn_server.main.vpn_netmask || printf '255.255.255.0')"
+    lan_network="$(uci -q get openvpn_server.main.lan_network || printf '192.168.50.0')"
+    lan_netmask="$(uci -q get openvpn_server.main.lan_netmask || printf '255.255.255.0')"
+    client_dns="$(uci -q get openvpn_server.main.client_dns || printf '192.168.50.1')"
+    max_clients="$(uci -q get openvpn_server.main.max_clients || printf '10')"
+    auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
+    tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
+    lzo="$(uci -q get openvpn_server.main.lzo || printf '0')"
+    extra_config="$(uci -q get openvpn_server.main.extra_config || true)"
+    data_cipher=''
+    if uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1; then
+        data_cipher="$(configured_data_cipher)"
+    fi
 
-	case "$enabled" in 0|1) ;; *) fail '启用状态无效。' ;; esac
-	case "$proto" in udp|tcp-server) ;; *) fail '协议只能是 UDP 或 TCP。' ;; esac
-	valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '端口必须在 1 到 65535 之间。'
-	[ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '公网地址格式无效。'
-	valid_ipv4 "$vpn_network" || fail 'VPN 网络地址格式无效。'
-	valid_ipv4 "$vpn_netmask" || fail 'VPN 子网掩码格式无效。'
-	valid_ipv4 "$lan_network" || fail 'LAN 网络地址格式无效。'
-	valid_ipv4 "$lan_netmask" || fail 'LAN 子网掩码格式无效。'
-	valid_ipv4 "$client_dns" || fail '客户端 DNS 地址格式无效。'
-	valid_uint "$max_clients" && [ "$max_clients" -ge 1 ] && [ "$max_clients" -le 1024 ] || fail '最大客户端数量必须在 1 到 1024 之间。'
+    case "$enabled" in 0|1) ;; *) fail '启用状态无效。' ;; esac
+    case "$proto" in udp|tcp-server) ;; *) fail '协议只能是 UDP 或 TCP。' ;; esac
+    valid_auth_mode "$auth_mode" || fail '认证方式无效。'
+    valid_tunnel_type "$tunnel_type" || fail '隧道类型只能是 TUN 或 TAP。'
+    valid_boolean "$lzo" || fail 'LZO 开关值无效。'
+    valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '端口必须在 1 到 65535 之间。'
+    [ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '公网地址格式无效。'
+    valid_ipv4 "$vpn_network" || fail 'VPN 网络地址格式无效。'
+    valid_ipv4 "$vpn_netmask" || fail 'VPN 子网掩码格式无效。'
+    valid_ipv4 "$lan_network" || fail 'LAN 网络地址格式无效。'
+    valid_ipv4 "$lan_netmask" || fail 'LAN 子网掩码格式无效。'
+    valid_ipv4 "$client_dns" || fail '客户端 DNS 地址格式无效。'
+    valid_uint "$max_clients" && [ "$max_clients" -ge 1 ] && [ "$max_clients" -le 1024 ] || fail '最大客户端数量必须在 1 到 1024 之间。'
+    validate_extra_config "$extra_config" >/dev/null || fail '附加配置包含危险指令或不支持的内联配置块。'
+    while IFS= read -r route || [ -n "$route" ]; do
+        [ -z "$route" ] || valid_cidr "$route" || fail "推送路由格式无效：$route"
+    done <<EOF_ROUTES
+$(list_configured_routes)
+EOF_ROUTES
 
-	openvpn_enabled="$enabled"
-	if [ "$enabled" = '1' ] && ! pki_ready; then
-		openvpn_enabled='0'
-		printf '提示：尚未初始化证书，OpenVPN服务器保持停用。\n' >&2
-	fi
+    openvpn_enabled="$enabled"
+    if [ "$enabled" = '1' ] && ! pki_ready; then
+        openvpn_enabled='0'
+        printf '提示：尚未初始化证书，OpenVPN服务器保持停用。\n' >&2
+    fi
 
-	mkdir -p "$OPENVPN_DIR"
-	chmod 0700 "$OPENVPN_DIR"
+    mkdir -p "$OPENVPN_DIR" /etc/openvpn
+    chmod 0700 "$OPENVPN_DIR"
+    sync_accounts
+    if [ "$auth_mode" != 'cert' ] && ! accounts_ready; then
+        fail '账号认证模式至少需要一个已配置账号。'
+    fi
 
-	uci -q batch <<EOF
+    tunnel_device="${tunnel_type}0"
+    uci -q batch <<EOF
 set openvpn.$OPENVPN_SECTION='openvpn'
 set openvpn.$OPENVPN_SECTION.enabled='$openvpn_enabled'
+set openvpn.$OPENVPN_SECTION.config='$OPENVPN_CONFIG'
 set openvpn.$OPENVPN_SECTION.proto='$proto'
 set openvpn.$OPENVPN_SECTION.port='$port'
 set openvpn.$OPENVPN_SECTION.server='$vpn_network $vpn_netmask'
+set openvpn.$OPENVPN_SECTION.dev='$tunnel_device'
+set openvpn.$OPENVPN_SECTION.dev_type='$tunnel_type'
 set openvpn.$OPENVPN_SECTION.max_clients='$max_clients'
 set firewall.openvpn_server.proto='${proto%-server}'
 set firewall.openvpn_server.dest_port='$port'
+set network.vpn0.device='$tunnel_device'
 EOF
 
-	uci -q delete "openvpn.$OPENVPN_SECTION.tls_crypt" >/dev/null 2>&1 || true
-	uci -q delete "openvpn.$OPENVPN_SECTION.tls_auth" >/dev/null 2>&1 || true
+uci -q delete "openvpn.$OPENVPN_SECTION.tls_crypt" >/dev/null 2>&1 || true
+uci -q delete "openvpn.$OPENVPN_SECTION.tls_auth" >/dev/null 2>&1 || true
+for option in auth_user_pass_verify script_security verify_client_cert client_cert_not_required username_as_common_name comp_lzo; do
+    uci -q delete "openvpn.$OPENVPN_SECTION.$option" >/dev/null 2>&1 || true
+done
 
-	set_openvpn_default dev 'tun0'
-	set_openvpn_default topology 'subnet'
-	set_openvpn_default ca "$PKI_DIR/ca.crt"
-	set_openvpn_default cert "$PKI_DIR/issued/server.crt"
-	set_openvpn_default key "$PKI_DIR/private/server.key"
-	set_openvpn_default dh 'none'
-	set_openvpn_default crl_verify "$PKI_DIR/crl.pem"
-	set_openvpn_default tls_version_min '1.2'
-	set_openvpn_default auth 'SHA256'
-	set_openvpn_default keepalive '10 120'
-	set_openvpn_default persist_key '1'
-	set_openvpn_default persist_tun '1'
-	set_openvpn_default client_to_client '1'
-	set_openvpn_default user 'nobody'
-	set_openvpn_default group 'nogroup'
-	set_openvpn_default status '/var/run/openvpn-server.status'
-	set_openvpn_default verb '3'
+set_openvpn_default topology 'subnet'
+set_openvpn_default ca "$PKI_DIR/ca.crt"
+set_openvpn_default cert "$PKI_DIR/issued/server.crt"
+set_openvpn_default key "$PKI_DIR/private/server.key"
+set_openvpn_default dh 'none'
+set_openvpn_default crl_verify "$PKI_DIR/crl.pem"
+set_openvpn_default tls_version_min '1.2'
+set_openvpn_default auth 'SHA256'
+set_openvpn_default keepalive '10 120'
+set_openvpn_default persist_key '1'
+set_openvpn_default persist_tun '1'
+set_openvpn_default client_to_client '1'
+set_openvpn_default user 'nobody'
+set_openvpn_default group 'nogroup'
+set_openvpn_default status '/var/run/openvpn-server.status'
+set_openvpn_default verb '3'
+[ "$lzo" = '1' ] && uci -q set "openvpn.$OPENVPN_SECTION.comp_lzo=yes"
+[ "$auth_mode" = 'account' ] && uci -q set "openvpn.$OPENVPN_SECTION.verify_client_cert=none"
+[ "$auth_mode" != 'cert' ] && uci -q set "openvpn.$OPENVPN_SECTION.auth_user_pass_verify=$AUTH_SCRIPT via-file"
+[ "$auth_mode" != 'cert' ] && uci -q set "openvpn.$OPENVPN_SECTION.script_security=2"
+[ "$auth_mode" != 'cert' ] && uci -q set "openvpn.$OPENVPN_SECTION.username_as_common_name=1"
 
-	if [ -n "$data_cipher" ]; then
-		uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers=$data_cipher"
-		uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers_fallback=$data_cipher"
-	fi
+[ -z "$data_cipher" ] || {
+    uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers=$data_cipher"
+    uci -q set "openvpn.$OPENVPN_SECTION.data_ciphers_fallback=$data_cipher"
+}
 
-	replace_managed_push managed_push_route "route $lan_network $lan_netmask"
-	replace_managed_push managed_push_dns "dhcp-option DNS $client_dns"
-	replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
+replace_managed_push managed_push_route "route $lan_network $lan_netmask"
+replace_managed_push managed_push_dns "dhcp-option DNS $client_dns"
+replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
 
-	uci -q commit openvpn
-	uci -q commit openvpn_server
-	uci -q commit firewall
-	reload_services
+render_server_config "$proto" "$port" "$tunnel_type" "$tunnel_device" "$vpn_network" "$vpn_netmask" "$max_clients" \
+    "$lan_network" "$lan_netmask" "$client_dns" "$data_cipher" "$lzo" "$auth_mode" "$extra_config"
 
-	if [ "$enabled" = '1' ] && [ "$openvpn_enabled" = '0' ]; then
-		return 1
-	fi
+uci -q commit openvpn
+uci -q commit openvpn_server
+uci -q commit firewall
+uci -q commit network
+reload_services
 
-	printf 'OpenVPN服务器配置已应用。\n'
+if [ "$enabled" = '1' ] && [ "$openvpn_enabled" = '0' ]; then
+    return 1
+fi
+
+printf 'OpenVPN服务器配置已应用。\n'
+}
+
+
+save_account() {
+    local stage="$CLIENT_NAME" username password section salt hash enabled
+    case "$stage" in
+        /tmp/openvpn-account.*) ;;
+        *) fail '账号临时文件路径无效。' ;;
+    esac
+    [ -s "$stage" ] || fail '账号临时文件为空。'
+    username="$(sed -n '1p' "$stage")"
+    password="$(sed -n '2p' "$stage")"
+    valid_account_username "$username" || fail '用户名只能包含字母、数字、下划线、点和连字符，且不能超过32个字符。'
+    [ "${#password}" -le 256 ] || fail '密码长度不能超过256个字符。'
+    find_account_section "$username" || ACCOUNT_SECTION=''
+    section="$ACCOUNT_SECTION"
+    if [ -z "$section" ]; then
+        section="$(uci -q add openvpn_server account)"
+    fi
+    uci -q set "openvpn_server.$section.username=$username"
+    if [ -n "$password" ]; then
+        salt="$(random_salt)"
+        hash="$(password_hash "$salt" "$password")"
+        uci -q set "openvpn_server.$section.salt=$salt"
+        uci -q set "openvpn_server.$section.password_hash=$hash"
+    else
+        [ -n "$(uci -q get "openvpn_server.$section.password_hash" || true)" ] || fail '新增账号必须填写密码。'
+    fi
+    uci -q set "openvpn_server.$section.enabled=1"
+    uci -q commit openvpn_server
+    sync_accounts
+    enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
+    [ "$enabled" = '1' ] && /etc/init.d/openvpn restart >/dev/null 2>&1 || true
+    printf '账号 %s 已保存。\n' "$username"
+}
+
+delete_account() {
+    local username="$CLIENT_NAME" enabled
+    valid_account_username "$username" || fail '用户名格式无效。'
+    find_account_section "$username" || fail '账号不存在。'
+    uci -q delete "openvpn_server.$ACCOUNT_SECTION"
+    uci -q commit openvpn_server
+    sync_accounts
+    enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
+    [ "$enabled" = '1' ] && /etc/init.d/openvpn restart >/dev/null 2>&1 || true
+    printf '账号 %s 已删除。\n' "$username"
 }
 
 initialize_pki() {
@@ -335,22 +597,32 @@ list_clients() {
 }
 
 export_client() {
-	local remote_host port proto
+    local remote_host port proto auth_mode tunnel_type lzo data_cipher
 
-	valid_client_certificate "$CLIENT_NAME" || fail '客户端证书不存在或已经吊销。'
-	remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
-	port="$(uci -q get openvpn_server.main.port || printf '1194')"
-	proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
-	valid_remote_host "$remote_host" || fail '请先在服务器设置中填写公网地址或DDNS。'
-	case "$proto" in
-		tcp-server) proto='tcp-client' ;;
-		udp) ;;
-		*) fail 'OpenVPN协议配置无效。' ;;
-	esac
+    auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
+    tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
+    lzo="$(uci -q get openvpn_server.main.lzo || printf '0')"
+    data_cipher="$(uci -q get openvpn_server.main.data_cipher || true)"
+    valid_auth_mode "$auth_mode" || fail '认证方式配置无效。'
+    valid_tunnel_type "$tunnel_type" || fail '隧道类型配置无效。'
+    if [ "$auth_mode" = 'cert' ] || [ "$auth_mode" = 'both' ]; then
+        valid_client_certificate "$CLIENT_NAME" || fail '客户端证书不存在或已经吊销。'
+    else
+        valid_client_name "$CLIENT_NAME" || fail '客户端名称无效。'
+    fi
+    remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
+    port="$(uci -q get openvpn_server.main.port || printf '1194')"
+    proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
+    valid_remote_host "$remote_host" || fail '请先在服务器设置中填写公网地址或DDNS。'
+    case "$proto" in
+        tcp-server) proto='tcp-client' ;;
+        udp) ;;
+        *) fail 'OpenVPN协议配置无效。' ;;
+    esac
 
-	cat <<EOF
+    cat <<EOF
 client
-dev tun
+dev $tunnel_type
 proto $proto
 remote $remote_host $port
 resolv-retry infinite
@@ -359,27 +631,31 @@ persist-key
 persist-tun
 remote-cert-tls server
 auth SHA256
+auth-nocache
 verb 3
-<ca>
 EOF
-	sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$PKI_DIR/ca.crt"
-	cat <<'EOF'
-</ca>
-<cert>
-EOF
-	sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$PKI_DIR/issued/$CLIENT_NAME.crt"
-	cat <<'EOF'
-</cert>
-<key>
-EOF
-	sed -n '/-----BEGIN PRIVATE KEY-----/,/-----END PRIVATE KEY-----/p' "$PKI_DIR/private/$CLIENT_NAME.key"
-	cat <<'EOF'
-</key>
-EOF
+    [ -z "$data_cipher" ] || printf 'data-ciphers %s\ndata-ciphers-fallback %s\n' "$data_cipher" "$data_cipher"
+    [ "$lzo" = '1' ] && printf 'comp-lzo yes\n'
+    case "$auth_mode" in
+        account|both) printf 'auth-user-pass\n' ;;
+    esac
+    printf '%s\n' '<ca>'
+    sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$PKI_DIR/ca.crt"
+    printf '%s\n' '</ca>'
+    if [ "$auth_mode" = 'cert' ] || [ "$auth_mode" = 'both' ]; then
+        printf '%s\n' '<cert>'
+        sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' "$PKI_DIR/issued/$CLIENT_NAME.crt"
+        printf '%s\n' '</cert>'
+        printf '%s\n' '<key>'
+        sed -n '/-----BEGIN PRIVATE KEY-----/,/-----END PRIVATE KEY-----/p' "$PKI_DIR/private/$CLIENT_NAME.key"
+        printf '%s\n' '</key>'
+    fi
 }
 
 case "$ACTION" in
 	apply) apply_configuration ;;
+	save-account) save_account ;;
+	delete-account) delete_account ;;
 	init-pki) initialize_pki ;;
 	create-client) create_client ;;
 	revoke-client) revoke_client ;;
@@ -387,5 +663,5 @@ case "$ACTION" in
 	export-client) export_client ;;
 	list-ciphers) list_data_ciphers ;;
 	recommended-cipher) recommended_data_cipher ;;
-	*) fail '用法：openvpn-server-manager {apply|init-pki|create-client|revoke-client|list-clients|export-client|list-ciphers|recommended-cipher} [客户端名称]' ;;
+	*) fail '用法：openvpn-server-manager {apply|save-account|delete-account|init-pki|create-client|revoke-client|list-clients|export-client|list-ciphers|recommended-cipher} [参数]' ;;
 esac

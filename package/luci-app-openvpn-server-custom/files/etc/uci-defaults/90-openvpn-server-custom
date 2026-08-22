@@ -4,10 +4,15 @@ set -eu
 
 if ! uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1 &&
 	! uci -q get openvpn.custom_server.data_ciphers >/dev/null 2>&1; then
-	data_cipher="$(/usr/libexec/openvpn-server-manager recommended-cipher)"
-	uci -q set "openvpn_server.main.data_cipher=$data_cipher"
+	uci -q set 'openvpn_server.main.data_cipher=AES-128-GCM'
 	uci -q commit openvpn_server
 fi
+
+uci -q get openvpn_server.main.auth_mode >/dev/null 2>&1 || uci -q set 'openvpn_server.main.auth_mode=cert'
+uci -q get openvpn_server.main.tunnel_type >/dev/null 2>&1 || uci -q set 'openvpn_server.main.tunnel_type=tun'
+uci -q get openvpn_server.main.lzo >/dev/null 2>&1 || uci -q set 'openvpn_server.main.lzo=0'
+uci -q get openvpn_server.main.extra_config >/dev/null 2>&1 || uci -q set 'openvpn_server.main.extra_config='
+uci -q commit openvpn_server
 
 if ! uci -q get network.vpn0 >/dev/null; then
 	uci -q batch <<'EOF'

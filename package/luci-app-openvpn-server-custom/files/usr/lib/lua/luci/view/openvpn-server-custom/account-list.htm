@@ -1,0 +1,43 @@
+<%+cbi/valueheader%>
+<%
+local dispatcher = require "luci.dispatcher"
+local uci = require("luci.model.uci").cursor()
+local save_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "account-save")
+local delete_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "account-delete")
+local accounts = {}
+uci:foreach("openvpn_server", "account", function(section)
+    accounts[#accounts + 1] = section.username or ""
+end)
+table.sort(accounts)
+%>
+<div class="cbi-value-description">
+    本地账号仅保存随机盐和密码哈希。新增账号时必须填写密码，编辑账号时密码留空表示保留原密码。
+</div>
+<% if #accounts > 0 then %>
+<table class="table cbi-section-table">
+    <tr class="cbi-section-table-titles">
+        <th>用户名</th>
+        <th>操作</th>
+    </tr>
+    <% for _, username in ipairs(accounts) do %>
+    <tr class="cbi-section-table-row">
+        <td><%=pcdata(username)%></td>
+        <td>
+            <button type="submit" class="cbi-button cbi-button-remove"
+                name="account_delete" value="<%=pcdata(username)%>"
+                formaction="<%=pcdata(delete_url)%>" formmethod="post"
+                onclick="return confirm('确认删除账号 <%=pcdata(username)%>？');">删除</button>
+        </td>
+    </tr>
+    <% end %>
+</table>
+<% else %>
+<div class="cbi-value-description">尚未配置账号。</div>
+<% end %>
+<div class="cbi-value-field" style="margin-top:10px;">
+    <input type="text" name="account_username" maxlength="32" placeholder="用户名" />
+    <input type="password" name="account_password" maxlength="256" placeholder="密码" autocomplete="new-password" />
+    <button type="submit" class="cbi-button cbi-button-add"
+        formaction="<%=pcdata(save_url)%>" formmethod="post">保存账号</button>
+</div>
+<%+cbi/valuefooter%>

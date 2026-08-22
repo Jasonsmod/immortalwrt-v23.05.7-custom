@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -eu
+
+ACCOUNT_DB='/etc/openvpn/server-accounts'
+AUTH_FILE="${1-}"
+
+[ -r "$ACCOUNT_DB" ] || exit 1
+[ -r "$AUTH_FILE" ] || exit 1
+
+username="$(sed -n '1p' "$AUTH_FILE")"
+password="$(sed -n '2p' "$AUTH_FILE")"
+case "$username" in ''|*[!A-Za-z0-9_.-]*) exit 1 ;; esac
+
+while IFS=: read -r db_username salt stored_hash; do
+    [ "$db_username" = "$username" ] || continue
+    [ -n "$salt" ] || exit 1
+    [ "$(printf '%s' "$salt:$password" | sha256sum | awk '{ print $1 }')" = "$stored_hash" ] && exit 0
+    exit 1
+done < "$ACCOUNT_DB"
+
+exit 1

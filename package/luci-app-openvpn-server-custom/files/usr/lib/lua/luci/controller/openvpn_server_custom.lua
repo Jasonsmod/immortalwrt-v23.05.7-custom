@@ -1,9 +1,23 @@
 module("luci.controller.openvpn_server_custom", package.seeall)
 
 local CLIENT_MANAGER = "/usr/libexec/openvpn-client-manager"
+local SERVER_MANAGER = "/usr/libexec/openvpn-server-manager"
 local CLIENT_BASE = "/etc/openvpn/client-custom"
 local MAX_UPLOAD_SIZE = 1048576
-
+local CLIENT_CIPHERS = {
+	"CHACHA20-POLY1305",
+	"AES-128-GCM",
+	"AES-256-GCM",
+	"AES-128-CBC",
+	"AES-192-CBC",
+	"AES-256-CBC",
+	"AES-128-CFB",
+	"AES-192-CFB",
+	"AES-256-CFB",
+	"AES-128-OFB",
+	"AES-192-OFB",
+	"AES-256-OFB"
+}
 function index()
 	if not nixio.fs.access("/etc/config/openvpn_server") then
 		return
@@ -17,6 +31,8 @@ function index()
 	entry({"admin", "vpn", "openvpn-server-custom", "client-action"}, post("client_action")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-import"}, call("client_import")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "server-export"}, post("server_export")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "account-save"}, post("account_save")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "account-delete"}, post("account_delete")).leaf = true
 end
 
 local function valid_id(id)
@@ -152,9 +168,8 @@ local function available_interfaces()
 end
 
 local function available_ciphers()
-	local sys = require "luci.sys"
 	local ciphers = { "auto" }
-	for cipher in sys.exec(manager_command("list-ciphers") .. " 2>/dev/null"):gmatch("[^\r\n]+") do
+	for _, cipher in ipairs(CLIENT_CIPHERS) do
 		ciphers[#ciphers + 1] = cipher
 	end
 	return ciphers
@@ -350,12 +365,73 @@ function client_import()
 	end
 end
 
+local function redirect_server_settings(message)
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "settings")
+    if message and #message > 0 then
+        url = url .. "?message=" .. http.urlencode(message)
+    end
+    http.redirect(url)
+end
+
+function account_save()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local fs = require "nixio.fs"
+    local util = require "luci.util"
+    local username = http.formvalue("account_username") or ""
+    local password = http.formvalue("account_password") or ""
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if username:match("[^A-Za-z0-9_.-]") or #username == 0 or #username > 32 or
+        username:find("[\r\n]") or password:find("[\r\n]") or #password > 256 then
+        redirect_server_settings("错误：账号或密码格式无效。")
+        return
+    end
+    local stage = sys.exec("mktemp /tmp/openvpn-account.XXXXXX 2>/dev/null"):gsub("%s+$", "")
+    if not stage:match("^/tmp/openvpn%-account%.[A-Za-z0-9]+$") then
+        redirect_server_settings("错误：无法创建账号临时文件。")
+        return
+    end
+    sys.call("chmod 0600 " .. util.shellquote(stage))
+    if not fs.writefile(stage, username .. "\n" .. password .. "\n") then
+        fs.unlink(stage)
+        redirect_server_settings("错误：无法写入账号临时文件。")
+        return
+    end
+    local result = sys.exec(SERVER_MANAGER .. " save-account " .. util.shellquote(stage) .. " 2>&1"):gsub("%s+$", "")
+    fs.unlink(stage)
+    redirect_server_settings(result)
+end
+
+function account_delete()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local util = require "luci.util"
+    local username = http.formvalue("account_delete") or ""
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if not username:match("^[A-Za-z0-9_.-]+$") or #username > 32 then
+        redirect_server_settings("错误：用户名格式无效。")
+        return
+    end
+    local result = sys.exec(SERVER_MANAGER .. " delete-account " .. util.shellquote(username) .. " 2>&1"):gsub("%s+$", "")
+    redirect_server_settings(result)
+end
+
 function server_export()
 	local http = require "luci.http"
 	local fs = require "nixio.fs"
 	local sys = require "luci.sys"
 	local util = require "luci.util"
 	local name = http.formvalue("server_client_name") or ""
+	local auth_mode = sys.exec("uci -q get openvpn_server.main.auth_mode 2>/dev/null"):gsub("%s+$", "")
+	local needs_certificate = auth_mode ~= "account"
 
 	if #name == 0 or #name > 32 or not name:match("^[A-Za-z0-9_-]+$") then
 		http.status(400, "Bad Request")
@@ -377,8 +453,8 @@ function server_export()
 	end
 
 	local quoted = util.shellquote(name)
-	if not fs.access("/etc/easy-rsa/pki/issued/" .. name .. ".crt") then
-		local result = sys.exec("/usr/libexec/openvpn-server-manager create-client " .. quoted .. " 2>&1")
+	if needs_certificate and not fs.access("/etc/easy-rsa/pki/issued/" .. name .. ".crt") then
+		local result = sys.exec(SERVER_MANAGER .. " create-client " .. quoted .. " 2>&1")
 		if result:match("^错误：") then
 			http.status(409, "Conflict")
 			http.prepare_content("text/plain; charset=utf-8")
@@ -387,7 +463,7 @@ function server_export()
 		end
 	end
 
-	local profile = sys.exec("/usr/libexec/openvpn-server-manager export-client " .. quoted .. " 2>/dev/null")
+	local profile = sys.exec(SERVER_MANAGER .. " export-client " .. quoted .. " 2>/dev/null")
 	if not profile:match("^client\n") then
 		http.status(409, "Conflict")
 		http.prepare_content("text/plain; charset=utf-8")

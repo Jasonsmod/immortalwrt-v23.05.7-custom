@@ -1,0 +1,12 @@
+{
+  "luci-app-connected-devices": {
+    "description": "Grant LuCI access to connected device information",
+    "read": {
+      "ubus": {
+        "luci.connected-devices": [
+          "getDevices"
+        ]
+      }
+    }
+  }
+}

@@ -7,12 +7,14 @@ TOPDIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_DIR="$TOPDIR/package/luci-app-openvpn-server-custom"
 DEFAULTS="$PACKAGE_DIR/files/etc/uci-defaults/90-openvpn-server-custom"
 MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-server-manager"
+AUTH_SCRIPT="$PACKAGE_DIR/files/usr/libexec/openvpn-server-auth"
 CLIENT_MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-client-manager"
 CONTROLLER="$PACKAGE_DIR/files/usr/lib/lua/luci/controller/openvpn_server_custom.lua"
 SERVER_MODEL="$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua"
 ACTIONS_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/server-actions.htm"
 CLIENT_LIST_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-list.htm"
 CLIENT_EDIT_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-edit.htm"
+ACCOUNT_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/account-list.htm"
 ERRORS=0
 
 fail_check() {
@@ -35,12 +37,14 @@ for file in \
 	"$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" \
 	"$DEFAULTS" \
 	"$MANAGER" \
+	"$AUTH_SCRIPT" \
 	"$CLIENT_MANAGER" \
 	"$CONTROLLER" \
 	"$SERVER_MODEL" \
 	"$ACTIONS_TEMPLATE" \
 	"$CLIENT_LIST_TEMPLATE" \
-	"$CLIENT_EDIT_TEMPLATE"
+	"$CLIENT_EDIT_TEMPLATE" \
+	"$ACCOUNT_TEMPLATE"
 do
 	require_file "$file"
 done
@@ -51,6 +55,7 @@ fi
 
 sh -n "$DEFAULTS" || fail_check 'OpenVPN网络初始化脚本语法无效。'
 sh -n "$MANAGER" || fail_check 'OpenVPN证书管理脚本语法无效。'
+sh -n "$AUTH_SCRIPT" || fail_check 'OpenVPN账号认证脚本语法无效。'
 sh -n "$CLIENT_MANAGER" || fail_check 'OpenVPN客户端管理脚本语法无效。'
 
 require_text "$DEFAULTS" "set network.vpn0.device='tun0'"
@@ -66,12 +71,20 @@ require_text "$MANAGER" 'CHACHA20-POLY1305'
 require_text "$MANAGER" 'AES-128-GCM'
 require_text "$MANAGER" 'set_openvpn_default'
 require_text "$MANAGER" 'replace_managed_push'
+require_text "$MANAGER" 'render_server_config'
+require_text "$MANAGER" 'auth-user-pass-verify'
+require_text "$MANAGER" 'save_account'
+require_text "$AUTH_SCRIPT" 'server-accounts'
 require_text "$MANAGER" 'data_ciphers_fallback'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_crypt"'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_auth"'
-require_text "$DEFAULTS" 'recommended-cipher'
+require_text "$DEFAULTS" 'data_cipher=AES-128-GCM'
 require_text "$SERVER_MODEL" 'if not pki_ready then'
-require_text "$SERVER_MODEL" 'list-ciphers'
+require_text "$SERVER_MODEL" 'available_ciphers'
+require_text "$SERVER_MODEL" 'DynamicList'
+require_text "$SERVER_MODEL" 'auth_mode'
+require_text "$SERVER_MODEL" 'tunnel_type'
+require_text "$SERVER_MODEL" 'extra_config'
 require_text "$ACTIONS_TEMPLATE" '导出 Windows 客户端配置'
 require_text "$ACTIONS_TEMPLATE" 'if not self.pki_ready then'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-server-manager'
@@ -80,10 +93,13 @@ require_text "$PACKAGE_DIR/Makefile" 'openvpn_client_custom'
 require_text "$PACKAGE_DIR/Makefile" 'client-list.htm'
 require_text "$PACKAGE_DIR/Makefile" 'client-edit.htm'
 require_text "$PACKAGE_DIR/Makefile" 'server-actions.htm'
+require_text "$PACKAGE_DIR/Makefile" 'openvpn-server-auth'
+require_text "$PACKAGE_DIR/Makefile" 'account-list.htm'
 require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/server/'
 require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/client-custom/'
 require_text "$CONTROLLER" 'post("client_save")'
 require_text "$CONTROLLER" 'post("client_action")'
+require_text "$CONTROLLER" 'CLIENT_CIPHERS'
 require_text "$CONTROLLER" 'dispatcher.test_post_security()'
 require_text "$CONTROLLER" 'http.setfilehandler'
 require_text "$CONTROLLER" 'post("server_export")'
@@ -101,6 +117,14 @@ require_text "$CLIENT_MANAGER" 'enable|disable|delete'
 require_text "$CLIENT_MANAGER" 'openvpn.client_$id.config'
 require_text "$CLIENT_MANAGER" 'bind-dev'
 require_text "$CLIENT_MANAGER" 'BF-*'
+
+if grep -Eq 'sys\.exec\(manager.*(list-ciphers|recommended-cipher)' "$SERVER_MODEL"; then
+	fail_check '服务端页面不应在加载时执行算法探测。'
+fi
+
+if grep -Fq 'manager_command("list-ciphers")' "$CONTROLLER"; then
+	fail_check '客户端编辑页面不应在加载时执行算法探测。'
+fi
 
 if grep -Fq 'clients.lua' "$PACKAGE_DIR/Makefile"; then
 	fail_check '旧客户端证书页面不应继续安装。'

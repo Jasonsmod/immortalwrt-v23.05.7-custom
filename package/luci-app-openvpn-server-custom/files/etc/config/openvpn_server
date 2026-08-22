@@ -1,4 +1,8 @@
 config settings 'main'
+	option auth_mode 'cert'
+	option tunnel_type 'tun'
+	option lzo '0'
+	option extra_config ''
 	option enabled '0'
 	option proto 'udp'
 	option port '1194'

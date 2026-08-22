@@ -1,3 +1,4 @@
 /etc/easy-rsa/pki/
 /etc/openvpn/server/
 /etc/openvpn/client-custom/
+/etc/openvpn/server-accounts
