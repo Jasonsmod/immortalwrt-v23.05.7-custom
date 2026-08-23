@@ -45,6 +45,7 @@ for symbol in \
 	CONFIG_PACKAGE_luci-app-openvpn \
 	CONFIG_PACKAGE_luci-app-openvpn-server-custom \
 	CONFIG_PACKAGE_openvpn-openssl \
+	CONFIG_OPENVPN_openssl_ENABLE_LZO \
 	CONFIG_PACKAGE_openvpn-easy-rsa \
 	CONFIG_PACKAGE_kmod-tun \
 	CONFIG_PACKAGE_luci-app-mwan3 \
