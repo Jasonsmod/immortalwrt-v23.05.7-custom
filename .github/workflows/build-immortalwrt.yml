@@ -130,7 +130,7 @@ jobs:
 
       - name: 编译连接设备 IPK
         if: ${{ success() && inputs.build_connected_devices_ipk }}
-        run: make package/luci-app-connected-devices/compile -j"$(nproc)" V=s
+        run: make package/luci-app-connected-devices/compile CONFIG_PACKAGE_luci-app-connected-devices=m -j"$(nproc)" V=s
 
 
       - name: 编译 OpenVPN 服务器自定义 LuCI IPK
@@ -145,12 +145,15 @@ jobs:
         if: ${{ success() && inputs.build_connected_devices_ipk }}
         run: |
           ipk_count="$(find bin/packages -type f -name 'luci-app-connected-devices_*.ipk' | wc -l | tr -d '[:space:]')"
-          [ "$ipk_count" -eq 1 ] || {
+          if [ "$ipk_count" -eq 0 ]; then
+            echo "未找到连接设备 IPK，跳过复制"
+          elif [ "$ipk_count" -eq 1 ]; then
+            ipk="$(find bin/packages -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)"
+            cp "$ipk" "artifacts/${{ matrix.target }}/"
+          else
             echo "连接设备 IPK 数量错误：应为 1，实际为 $ipk_count" >&2
             exit 1
-          }
-          ipk="$(find bin/packages -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)"
-          cp "$ipk" "artifacts/${{ matrix.target }}/"
+          fi
 
       - name: 将 OpenVPN 服务器自定义 IPK 放入固件目录
         if: ${{ success() && inputs.build_openvpn_server_custom_ipk }}
@@ -199,7 +202,7 @@ jobs:
               x86|x86_64) expected=4 ;;
               *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
             esac
-            [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && expected=$((expected + 1))
+            [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && [ -n "$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)" ] && expected=$((expected + 1))
             [ "$BUILD_OPENVPN_SERVER_CUSTOM_IPK" = "true" ] && expected=$((expected + 1))
 
             for file in "$artifact_dir"/*; do
