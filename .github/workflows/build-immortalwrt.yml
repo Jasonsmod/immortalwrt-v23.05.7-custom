@@ -18,6 +18,16 @@ on:
         required: false
         default: false
         type: boolean
+      build_connected_devices_ipk:
+        description: 编译连接设备 LuCI IPK
+        required: false
+        default: false
+        type: boolean
+      build_openvpn_server_custom_ipk:
+        description: 编译 OpenVPN 服务器自定义 LuCI IPK
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -118,9 +128,40 @@ jobs:
         if: ${{ matrix.target == 'r619ac' }}
         run: bash scripts/custom/verify-r619ac-images.sh
 
+      - name: 编译连接设备 IPK
+        if: ${{ success() && inputs.build_connected_devices_ipk }}
+        run: make package/luci-app-connected-devices/compile -j"$(nproc)" V=s
+
+
+      - name: 编译 OpenVPN 服务器自定义 LuCI IPK
+        if: ${{ success() && inputs.build_openvpn_server_custom_ipk }}
+        run: make package/luci-app-openvpn-server-custom/compile -j"$(nproc)" V=s
+
       - name: 收集发布固件
         if: ${{ success() }}
         run: bash scripts/custom/collect-release-files.sh "${{ matrix.target }}" bin/targets "artifacts/${{ matrix.target }}"
+
+      - name: 将连接设备 IPK 放入固件目录
+        if: ${{ success() && inputs.build_connected_devices_ipk }}
+        run: |
+          ipk_count="$(find bin/packages -type f -name 'luci-app-connected-devices_*.ipk' | wc -l | tr -d '[:space:]')"
+          [ "$ipk_count" -eq 1 ] || {
+            echo "连接设备 IPK 数量错误：应为 1，实际为 $ipk_count" >&2
+            exit 1
+          }
+          ipk="$(find bin/packages -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)"
+          cp "$ipk" "artifacts/${{ matrix.target }}/"
+
+      - name: 将 OpenVPN 服务器自定义 IPK 放入固件目录
+        if: ${{ success() && inputs.build_openvpn_server_custom_ipk }}
+        run: |
+          ipk_count="$(find bin/packages -type f -name 'luci-app-openvpn-server-custom_*.ipk' | wc -l | tr -d '[:space:]')"
+          [ "$ipk_count" -eq 1 ] || {
+            echo "OpenVPN 服务器自定义 IPK 数量错误：应为 1，实际为 $ipk_count" >&2
+            exit 1
+          }
+          ipk="$(find bin/packages -type f -name 'luci-app-openvpn-server-custom_*.ipk' -print -quit)"
+          cp "$ipk" "artifacts/${{ matrix.target }}/"
 
       - name: 上传构建产物
         if: ${{ success() && hashFiles('artifacts/**') != '' }}
@@ -145,6 +186,9 @@ jobs:
           path: artifacts
 
       - name: 整理 Release 文件
+        env:
+          BUILD_CONNECTED_DEVICES_IPK: ${{ inputs.build_connected_devices_ipk }}
+          BUILD_OPENVPN_SERVER_CUSTOM_IPK: ${{ inputs.build_openvpn_server_custom_ipk }}
         run: |
           mkdir -p release-assets
           for artifact_dir in artifacts/immortalwrt-23.05.7-*; do
@@ -155,6 +199,8 @@ jobs:
               x86|x86_64) expected=4 ;;
               *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
             esac
+            [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && expected=$((expected + 1))
+            [ "$BUILD_OPENVPN_SERVER_CUSTOM_IPK" = "true" ] && expected=$((expected + 1))
 
             for file in "$artifact_dir"/*; do
               [ -f "$file" ] || continue
@@ -163,6 +209,18 @@ jobs:
                 r619ac:*factory.ubi|r619ac:*sysupgrade.bin|r619ac:sha256sums|r619ac:*version.buildinfo) ;;
                 x86:*squashfs-combined.img.gz|x86:*squashfs-combined-efi.img.gz|x86:sha256sums|x86:*version.buildinfo) ;;
                 x86_64:*squashfs-combined.img.gz|x86_64:*squashfs-combined-efi.img.gz|x86_64:sha256sums|x86_64:*version.buildinfo) ;;
+                *:luci-app-connected-devices_*.ipk)
+                  [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] || {
+                    echo "未启用 IPK 编译却发现连接设备 IPK：$file" >&2
+                    exit 1
+                  }
+                  ;;
+                *:luci-app-openvpn-server-custom_*.ipk)
+                  [ "$BUILD_OPENVPN_SERVER_CUSTOM_IPK" = "true" ] || {
+                    echo "未启用 IPK 编译却发现 OpenVPN 服务器自定义 IPK：$file" >&2
+                    exit 1
+                  }
+                  ;;
                 *) echo "拒绝发布非白名单文件：$file" >&2; exit 1 ;;
               esac
               destination="release-assets/${target}-${name}"

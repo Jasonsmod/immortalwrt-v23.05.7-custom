@@ -1,7 +1,7 @@
 config settings 'main'
 	option auth_mode 'cert'
 	option tunnel_type 'tun'
-	option lzo '0'
+	option lzo '1'
 	option extra_config ''
 	option enabled '0'
 	option proto 'udp'

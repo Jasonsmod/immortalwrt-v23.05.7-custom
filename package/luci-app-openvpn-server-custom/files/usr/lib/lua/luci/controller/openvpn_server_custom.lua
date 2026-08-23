@@ -111,9 +111,10 @@ local function profile_data(id)
 		remote_port = "1194",
 		proto = "udp",
 		auth_mode = "cert",
+		tunnel_type = "tun",
 		bind_interface = "auto",
 		data_cipher = "auto",
-		lzo = "0",
+		lzo = "1",
 		tun_mtu = "1400",
 		accept_routes = "1",
 		enabled = "0",
@@ -131,7 +132,7 @@ local function profile_data(id)
 
 	profile.id = id
 	for _, option in ipairs({
-		"name", "remote_host", "remote_port", "proto", "auth_mode",
+		"name", "remote_host", "remote_port", "proto", "auth_mode", "tunnel_type",
 		"bind_interface", "data_cipher", "lzo", "tun_mtu",
 		"accept_routes", "enabled"
 	}) do
@@ -238,6 +239,7 @@ function client_save()
 		remote_port = http.formvalue("remote_port"),
 		proto = http.formvalue("proto"),
 		auth_mode = http.formvalue("auth_mode"),
+		tunnel_type = http.formvalue("tunnel_type"),
 		bind_interface = http.formvalue("bind_interface"),
 		data_cipher = http.formvalue("data_cipher"),
 		lzo = http.formvalue("lzo") and "1" or "0",

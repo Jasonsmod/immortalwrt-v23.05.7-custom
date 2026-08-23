@@ -25,6 +25,12 @@ end
 			<legend>客户端设置</legend>
 
 			<div class="cbi-value">
+				<label class="cbi-value-title" for="enabled">启用</label>
+				<div class="cbi-value-field"><input id="enabled" name="enabled" type="checkbox"
+					value="1"<%=checked(profile.enabled)%> /></div>
+			</div>
+
+			<div class="cbi-value">
 				<label class="cbi-value-title" for="name">拨号名称</label>
 				<div class="cbi-value-field"><input id="name" name="name" type="text" maxlength="64"
 					value="<%=pcdata(profile.name)%>" required="required" /></div>
@@ -74,8 +80,11 @@ end
 				</select></div>
 			</div>
 			<div class="cbi-value">
-				<label class="cbi-value-title">隧道类型</label>
-				<div class="cbi-value-field">TUN</div>
+				<label class="cbi-value-title" for="tunnel_type">隧道类型</label>
+				<div class="cbi-value-field"><select id="tunnel_type" name="tunnel_type">
+					<option value="tun"<%=selected("tun", profile.tunnel_type)%>>TUN</option>
+					<option value="tap"<%=selected("tap", profile.tunnel_type)%>>TAP</option>
+				</select></div>
 			</div>
 			<div class="cbi-value">
 				<label class="cbi-value-title" for="data_cipher">加密算法</label>
@@ -84,13 +93,12 @@ end
 					<option value="<%=pcdata(cipher)%>"<%=selected(cipher, profile.data_cipher)%>><%=cipher == "auto" and "自动（按 CPU 推荐）" or pcdata(cipher)%></option>
 					<% end %>
 				</select>
-				<div class="cbi-value-description">BF 系列算法不允许使用。</div></div>
+				</div>
 			</div>
 			<div class="cbi-value">
 				<label class="cbi-value-title" for="lzo">LZO 压缩</label>
 				<div class="cbi-value-field"><input id="lzo" name="lzo" type="checkbox" value="1"<%=checked(profile.lzo)%> />
 					<label for="lzo">开启</label>
-					<div class="cbi-value-description">压缩可能带来安全风险，仅在服务器明确要求时启用。</div>
 				</div>
 			</div>
 			<div class="cbi-value">
@@ -125,11 +133,6 @@ end
 				<label class="cbi-value-title" for="routes">添加路由</label>
 				<div class="cbi-value-field"><textarea id="routes" name="routes" rows="5"
 					placeholder="192.168.1.0/24，一行一条"><%=pcdata(profile.routes)%></textarea></div>
-			</div>
-			<div class="cbi-value">
-				<label class="cbi-value-title" for="enabled">启用</label>
-				<div class="cbi-value-field"><input id="enabled" name="enabled" type="checkbox"
-					value="1"<%=checked(profile.enabled)%> /></div>
 			</div>
 		</fieldset>
 		<div class="cbi-page-actions">

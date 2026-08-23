@@ -4,13 +4,18 @@ set -eu
 
 if ! uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1 &&
 	! uci -q get openvpn.custom_server.data_ciphers >/dev/null 2>&1; then
-	uci -q set 'openvpn_server.main.data_cipher=AES-128-GCM'
+	if grep -Eiq '(^|[[:space:]])aes([[:space:]]|$)' /proc/cpuinfo; then
+		data_cipher='AES-128-GCM'
+	else
+		data_cipher='CHACHA20-POLY1305'
+	fi
+	uci -q set "openvpn_server.main.data_cipher=$data_cipher"
 	uci -q commit openvpn_server
 fi
 
 uci -q get openvpn_server.main.auth_mode >/dev/null 2>&1 || uci -q set 'openvpn_server.main.auth_mode=cert'
 uci -q get openvpn_server.main.tunnel_type >/dev/null 2>&1 || uci -q set 'openvpn_server.main.tunnel_type=tun'
-uci -q get openvpn_server.main.lzo >/dev/null 2>&1 || uci -q set 'openvpn_server.main.lzo=0'
+uci -q get openvpn_server.main.lzo >/dev/null 2>&1 || uci -q set 'openvpn_server.main.lzo=1'
 uci -q get openvpn_server.main.extra_config >/dev/null 2>&1 || uci -q set 'openvpn_server.main.extra_config='
 uci -q commit openvpn_server
 

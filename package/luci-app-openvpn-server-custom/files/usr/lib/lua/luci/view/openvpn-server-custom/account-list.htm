@@ -10,9 +10,6 @@ uci:foreach("openvpn_server", "account", function(section)
 end)
 table.sort(accounts)
 %>
-<div class="cbi-value-description">
-    本地账号仅保存随机盐和密码哈希。新增账号时必须填写密码，编辑账号时密码留空表示保留原密码。
-</div>
 <% if #accounts > 0 then %>
 <table class="table cbi-section-table">
     <tr class="cbi-section-table-titles">

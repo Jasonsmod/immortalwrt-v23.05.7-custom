@@ -65,6 +65,9 @@ valid_uint() {
 valid_bool() {
 	case "$1" in 0|1) return 0 ;; *) return 1 ;; esac
 }
+valid_tunnel_type() {
+	case "$1" in tun|tap) return 0 ;; *) return 1 ;; esac
+}
 
 valid_interface() {
 	case "$1" in auto) return 0 ;; ''|*[!A-Za-z0-9_.:-]*) return 1 ;; *) return 0 ;; esac
@@ -219,7 +222,7 @@ reload_openvpn() {
 }
 
 build_active() {
-	local id dir host port proto bind_interface bind_device cipher lzo mtu auth_mode accept_routes
+	local id dir host port proto bind_interface bind_device cipher lzo mtu auth_mode tunnel_type accept_routes
 	local route complete=1
 	id="$1"
 	dir="$(profile_dir "$id")"
@@ -228,10 +231,12 @@ build_active() {
 	proto="$(uci -q get "$CONFIG.$id.proto" || printf 'udp')"
 	bind_interface="$(uci -q get "$CONFIG.$id.bind_interface" || printf 'auto')"
 	cipher="$(uci -q get "$CONFIG.$id.data_cipher" || printf 'auto')"
-	lzo="$(uci -q get "$CONFIG.$id.lzo" || printf '0')"
+	lzo="$(uci -q get "$CONFIG.$id.lzo" || printf '1')"
 	mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || printf '1400')"
 	auth_mode="$(uci -q get "$CONFIG.$id.auth_mode" || printf 'cert')"
+	tunnel_type="$(uci -q get "$CONFIG.$id.tunnel_type" || printf 'tun')"
 	accept_routes="$(uci -q get "$CONFIG.$id.accept_routes" || printf '1')"
+	valid_tunnel_type "$tunnel_type" || fail '隧道类型无效。'
 
 	[ "$cipher" != 'auto' ] || cipher="$(recommended_cipher)"
 	supported_cipher "$cipher" || fail "本机OpenVPN不支持加密算法$cipher。"
@@ -247,8 +252,8 @@ build_active() {
 
 	{
 		printf '%s\n' 'client'
-		printf 'dev tun-c%s\n' "${id#c}"
-		printf '%s\n' 'dev-type tun'
+		printf 'dev %s-c%s\n' "$tunnel_type" "${id#c}"
+		printf 'dev-type %s\n' "$tunnel_type"
 		printf 'proto %s\n' "$proto"
 		printf 'remote %s %s\n' "$host" "$port"
 		printf '%s\n' 'resolv-retry infinite' 'nobind' 'persist-key' 'persist-tun' 'auth-nocache'
@@ -297,7 +302,7 @@ build_active() {
 
 save_profile() {
 	local staging="$1" id name host port proto auth_mode bind_interface cipher
-	local lzo mtu accept_routes enabled previous_enabled dir network_section complete username password
+	local lzo mtu tunnel_type accept_routes enabled previous_enabled dir network_section complete username password
 
 	case "$staging" in /tmp/openvpn-client.*) ;; *) fail '临时配置目录无效。' ;; esac
 	[ -d "$staging" ] || fail '临时配置目录不存在。'
@@ -311,6 +316,7 @@ save_profile() {
 	port="$(read_field "$staging" remote_port)"
 	proto="$(read_field "$staging" proto)"
 	auth_mode="$(read_field "$staging" auth_mode)"
+	tunnel_type="$(read_field "$staging" tunnel_type)"
 	bind_interface="$(read_field "$staging" bind_interface)"
 	cipher="$(read_field "$staging" data_cipher)"
 	lzo="$(read_field "$staging" lzo)"
@@ -321,9 +327,10 @@ save_profile() {
 	[ -n "$port" ] || port='1194'
 	[ -n "$proto" ] || proto='udp'
 	[ -n "$auth_mode" ] || auth_mode='cert'
+	[ -n "$tunnel_type" ] || tunnel_type='tun'
 	[ -n "$bind_interface" ] || bind_interface='auto'
 	[ -n "$cipher" ] || cipher='auto'
-	[ -n "$lzo" ] || lzo='0'
+	[ -n "$lzo" ] || lzo='1'
 	[ -n "$mtu" ] || mtu='1400'
 	[ -n "$accept_routes" ] || accept_routes='1'
 	[ -n "$enabled" ] || enabled='0'
@@ -333,6 +340,7 @@ save_profile() {
 	valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '服务器端口无效。'
 	case "$proto" in udp|tcp-client) ;; *) fail '隧道协议无效。' ;; esac
 	case "$auth_mode" in account|cert|both) ;; *) fail '认证方式无效。' ;; esac
+	valid_tunnel_type "$tunnel_type" || fail '隧道类型无效。'
 	valid_interface "$bind_interface" || fail '出口线路名称无效。'
 	valid_bool "$lzo" || fail 'LZO选项无效。'
 	[ "$lzo" = '0' ] || supported_lzo || fail '当前OpenVPN未编译LZO压缩支持。'
@@ -382,6 +390,7 @@ save_profile() {
 	uci -q set "$CONFIG.$id.remote_port=$port"
 	uci -q set "$CONFIG.$id.proto=$proto"
 	uci -q set "$CONFIG.$id.auth_mode=$auth_mode"
+	uci -q set "$CONFIG.$id.tunnel_type=$tunnel_type"
 	uci -q set "$CONFIG.$id.bind_interface=$bind_interface"
 	uci -q set "$CONFIG.$id.data_cipher=$cipher"
 	uci -q set "$CONFIG.$id.lzo=$lzo"
@@ -396,7 +405,7 @@ save_profile() {
 	network_section="ovpnc_$id"
 	uci -q set "network.$network_section=interface"
 	uci -q set "network.$network_section.proto=none"
-	uci -q set "network.$network_section.device=tun-c${id#c}"
+	uci -q set "network.$network_section.device=${tunnel_type}-c${id#c}"
 	uci -q set "network.$network_section.auto=1"
 	uci -q del_list "firewall.vpn.network=$network_section" >/dev/null 2>&1 || true
 	uci -q add_list "firewall.vpn.network=$network_section"
@@ -435,10 +444,11 @@ import_profile() {
 	printf '%s\n' "${display_name:-Imported OpenVPN}" > "$staging/name"
 	printf '%s\n' '1194' > "$staging/remote_port"
 	printf '%s\n' 'udp' > "$staging/proto"
+	printf '%s\n' 'tun' > "$staging/tunnel_type"
 	printf '%s\n' 'cert' > "$staging/auth_mode"
 	printf '%s\n' 'auto' > "$staging/bind_interface"
 	printf '%s\n' 'auto' > "$staging/data_cipher"
-	printf '%s\n' '0' > "$staging/lzo"
+	printf '%s\n' '1' > "$staging/lzo"
 	printf '%s\n' '1400' > "$staging/tun_mtu"
 	printf '%s\n' '1' > "$staging/accept_routes"
 	printf '%s\n' '0' > "$staging/enabled"
@@ -502,6 +512,10 @@ import_profile() {
 				if (value == "tcp" || value == "tcp-client") value = "tcp-client"
 				else value = "udp"
 				print value > out "/proto"
+			} else if (key == "dev" || key == "dev-type") {
+				value = lower(f[2])
+				if (value ~ /^tap/) print "tap" > out "/tunnel_type"
+				else if (value ~ /^tun/) print "tun" > out "/tunnel_type"
 			} else if (key == "cipher") {
 				if (f[2] != "" && f[2] !~ /^BF-/) print f[2] > out "/data_cipher"
 			} else if (key == "data-ciphers") {
@@ -546,7 +560,7 @@ import_profile() {
 }
 
 list_profiles() {
-	local id name host port proto enabled complete dir device local_ip state error
+	local id name host port proto tunnel_type enabled complete dir device local_ip state error
 	for id in $(uci -q show "$CONFIG" 2>/dev/null |
 		sed -n "s/^$CONFIG\.\(c[0-9a-f]*\)=profile$/\1/p"); do
 		valid_id "$id" || continue
@@ -554,10 +568,11 @@ list_profiles() {
 		host="$(uci -q get "$CONFIG.$id.remote_host" || true)"
 		port="$(uci -q get "$CONFIG.$id.remote_port" || printf '1194')"
 		proto="$(uci -q get "$CONFIG.$id.proto" || printf 'udp')"
+		tunnel_type="$(uci -q get "$CONFIG.$id.tunnel_type" || printf 'tun')"
 		enabled="$(uci -q get "$CONFIG.$id.enabled" || printf '0')"
 		complete="$(uci -q get "$CONFIG.$id.complete" || printf '0')"
 		dir="$(profile_dir "$id")"
-		device="tun-c${id#c}"
+		device="${tunnel_type}-c${id#c}"
 		local_ip="$(ip -4 -o addr show dev "$device" 2>/dev/null |
 			awk 'NR == 1 { split($4, a, "/"); print a[1] }')"
 		error=''

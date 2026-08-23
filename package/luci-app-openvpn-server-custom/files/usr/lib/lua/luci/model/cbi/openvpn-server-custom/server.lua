@@ -9,50 +9,22 @@ local pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
     fs.access("/etc/easy-rsa/pki/private/server.key")
 local running = sys.call("pgrep -f 'openvpn.*custom_server' >/dev/null 2>&1") == 0
 local configured_cipher = uci:get("openvpn_server", "main", "data_cipher")
-local recommended_cipher = configured_cipher or "AES-128-GCM"
+local cpuinfo = string.lower(fs.readfile("/proc/cpuinfo") or "")
+local cpu_supports_aes = cpuinfo:match("%f[%a]aes%f[%A]") ~= nil
+local recommended_cipher = cpu_supports_aes and "AES-128-GCM" or "CHACHA20-POLY1305"
+local selected_cipher = configured_cipher or recommended_cipher
 local available_ciphers = [[CHACHA20-POLY1305
 AES-128-GCM
 AES-256-GCM
 AES-128-CBC
 AES-192-CBC
 AES-256-CBC
-AES-128-OFB
-AES-192-OFB
-AES-256-OFB
 AES-128-CFB
 AES-192-CFB
 AES-256-CFB
-AES-128-CFB1
-AES-192-CFB1
-AES-256-CFB1
-AES-128-CFB8
-AES-192-CFB8
-AES-256-CFB8
-DES-CFB
-DES-CBC
-RC2-CBC
-RC2-CFB
-RC2-OFB
-DES-EDE-CBC
-DES-EDE3-CBC
-DES-OFB
-DES-EDE-CFB
-DES-EDE3-CFB
-DES-EDE-OFB
-DES-EDE3-OFB
-DESX-CBC
-RC2-40-CBC
-CAST5-CBC
-CAST5-CFB
-CAST5-OFB
-RC2-64-CBC
-DES-CFB1
-DES-CFB8
-DES-EDE3-CFB1
-DES-EDE3-CFB8
-SEED-CBC
-SEED-OFB
-SEED-CFB]]
+AES-128-OFB
+AES-192-OFB
+AES-256-OFB]]
 m = Map("openvpn_server", "OpenVPN 服务器",
 	"独立管理 OpenVPN 服务器和证书。服务器只有在 PKI 初始化完成后才会启动。")
 m.description = string.format("当前状态：%s；证书状态：%s。",
@@ -96,7 +68,11 @@ auth_mode:value("cert", "密钥认证")
 auth_mode:value("both", "账号+密钥")
 auth_mode.default = "cert"
 auth_mode.rmempty = false
-auth_mode.description = "密钥认证为默认方式；账号认证需要先配置账号。"
+
+accounts = s:option(DummyValue, "_accounts", "账号认证账号")
+accounts.template = "openvpn-server-custom/account-list"
+accounts:depends("auth_mode", "account")
+accounts:depends("auth_mode", "both")
 
 proto = s:option(ListValue, "proto", "传输协议")
 proto:value("udp", "UDP")
@@ -114,27 +90,21 @@ topology = s:option(DummyValue, "_topology", "拓扑类型")
 topology.default = "SUBNET"
 
 lzo = s:option(Flag, "lzo", "LZO压缩")
-lzo.default = "0"
+lzo.default = "1"
 lzo.rmempty = false
-lzo.description = "开启后使用 comp-lzo yes；客户端必须使用相同设置。"
 
 data_cipher = s:option(ListValue, "data_cipher", "加密算法")
 for cipher_name in available_ciphers:gmatch("[^\r\n]+") do
 	local label
 	if cipher_name == recommended_cipher then
 		label = cipher_name .. "（推荐，已按 CPU 自动选择）"
-	elseif cipher_name == "CHACHA20-POLY1305" or cipher_name:match("%-GCM$") then
-		label = cipher_name .. "（现代 AEAD）"
-	elseif cipher_name:match("^AES%-") then
-		label = cipher_name .. "（旧客户端兼容）"
 	else
-		label = cipher_name .. "（旧版兼容，不推荐）"
+		label = cipher_name
 	end
 	data_cipher:value(cipher_name, label)
 end
-data_cipher.default = recommended_cipher
+data_cipher.default = selected_cipher
 data_cipher.rmempty = false
-data_cipher.description = "页面不再执行外部算法探测；保存时由服务端校验当前 OpenVPN 是否支持。"
 
 remote = s:option(Value, "remote_host", "公网地址或 DDNS")
 remote.description = "生成客户端配置时写入的服务器地址。"
@@ -180,13 +150,6 @@ max_clients.rmempty = false
 extra_config = s:option(TextValue, "extra_config", "附加配置")
 extra_config.rows = 8
 extra_config.rmempty = true
-extra_config.description = "示例：tcp-queue-limit 32；mtu-disc no。脚本、插件、管理接口和核心身份参数会被拒绝。"
-
-accounts = s:option(DummyValue, "_accounts", "账号认证账号")
-accounts.template = "openvpn-server-custom/account-list"
-
-certificate_status = s:option(DummyValue, "_certificate_status", "证书状态")
-certificate_status.default = pki_ready and "已初始化" or "未初始化"
 
 function m.on_after_commit()
     m.message = sys.exec(manager .. " apply 2>&1")

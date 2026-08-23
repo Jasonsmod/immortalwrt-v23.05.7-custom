@@ -78,13 +78,20 @@ require_text "$AUTH_SCRIPT" 'server-accounts'
 require_text "$MANAGER" 'data_ciphers_fallback'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_crypt"'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_auth"'
-require_text "$DEFAULTS" 'data_cipher=AES-128-GCM'
+require_text "$DEFAULTS" 'grep -Eiq'
+require_text "$DEFAULTS" "data_cipher='AES-128-GCM'"
+require_text "$DEFAULTS" "data_cipher='CHACHA20-POLY1305'"
 require_text "$SERVER_MODEL" 'if not pki_ready then'
 require_text "$SERVER_MODEL" 'available_ciphers'
 require_text "$SERVER_MODEL" 'DynamicList'
 require_text "$SERVER_MODEL" 'auth_mode'
 require_text "$SERVER_MODEL" 'tunnel_type'
 require_text "$SERVER_MODEL" 'extra_config'
+require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "account")'
+require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "both")'
+require_text "$SERVER_MODEL" 'lzo.default = "1"'
+require_text "$SERVER_MODEL" 'cpu_supports_aes'
+require_text "$SERVER_MODEL" 'data_cipher.default = selected_cipher'
 require_text "$ACTIONS_TEMPLATE" '导出 Windows 客户端配置'
 require_text "$ACTIONS_TEMPLATE" 'if not self.pki_ready then'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-server-manager'
@@ -110,6 +117,12 @@ require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('disable')"
 require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('delete')"
 require_text "$CLIENT_EDIT_TEMPLATE" '附加配置'
 require_text "$CLIENT_EDIT_TEMPLATE" '服务器路由推送'
+require_text "$CLIENT_EDIT_TEMPLATE" 'name="tunnel_type"'
+require_text "$CLIENT_EDIT_TEMPLATE" 'value="tap"'
+require_text "$CONTROLLER" 'tunnel_type = http.formvalue("tunnel_type")'
+require_text "$CLIENT_MANAGER" 'valid_tunnel_type'
+require_text "$CLIENT_MANAGER" 'dev-type %s'
+require_text "$CLIENT_MANAGER" 'tunnel_type=$tunnel_type'
 require_text "$CLIENT_MANAGER" 'dangerous_config'
 require_text "$CLIENT_MANAGER" 'MAX_IMPORT_SIZE=1048576'
 require_text "$CLIENT_MANAGER" 'chmod 0600'
@@ -125,6 +138,16 @@ fi
 if grep -Fq 'manager_command("list-ciphers")' "$CONTROLLER"; then
 	fail_check '客户端编辑页面不应在加载时执行算法探测。'
 fi
+
+if grep -Eq 'BF 系列算法不允许使用|压缩可能带来安全风险|>TUN</div>' "$CLIENT_EDIT_TEMPLATE"; then
+	fail_check '客户端添加页仍包含已移除的提示或固定 TUN 控件。'
+fi
+
+if grep -Eq 'DES-|RC2-|SEED-|CAST5-|CFB1|CFB8|certificate_status|auth_mode\.description|lzo\.description|extra_config\.description' "$SERVER_MODEL"; then
+	fail_check '服务端设置页仍包含已移除的算法或冗余提示。'
+fi
+require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option lzo '1'"
+require_text "$DEFAULTS" "main.lzo=1"
 
 if grep -Fq 'clients.lua' "$PACKAGE_DIR/Makefile"; then
 	fail_check '旧客户端证书页面不应继续安装。'
