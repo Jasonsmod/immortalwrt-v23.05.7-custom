@@ -170,8 +170,6 @@ define Package/dnsmasq/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/dhcp.conf $(1)/etc/config/dhcp
 	$(INSTALL_CONF) ./files/dnsmasq.conf $(1)/etc/dnsmasq.conf
-	$(INSTALL_DIR) $(1)/etc/dnsmasq.d
-	$(INSTALL_DATA) ./files/dnsmasq.d/00-default.conf $(1)/etc/dnsmasq.d/00-default.conf
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/dnsmasq.init $(1)/etc/init.d/dnsmasq
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/dhcp

@@ -25,8 +25,6 @@ Build/Compile =
 define Package/custom-firmware-defaults/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/etc/uci-defaults/99-custom-firmware $(1)/etc/uci-defaults/99-custom-firmware
-	$(INSTALL_DIR) $(1)/etc/dnsmasq.d
-	$(INSTALL_DATA) ./files/etc/dnsmasq.d/00-custom.conf $(1)/etc/dnsmasq.d/00-custom.conf
 	$(INSTALL_DIR) $(1)/etc/sysctl.d
 	$(INSTALL_DATA) ./files/etc/sysctl.d/13-custom-fq.conf $(1)/etc/sysctl.d/13-custom-fq.conf
 endef
