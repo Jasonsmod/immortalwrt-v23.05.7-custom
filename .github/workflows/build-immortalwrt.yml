@@ -130,12 +130,18 @@ jobs:
 
       - name: 编译连接设备 IPK
         if: ${{ success() && inputs.build_connected_devices_ipk }}
-        run: make package/luci-app-connected-devices/compile CONFIG_PACKAGE_luci-app-connected-devices=m -j"$(nproc)" V=s
+        run: |
+          if ! make package/luci-app-connected-devices/compile CONFIG_PACKAGE_luci-app-connected-devices=m -j"$(nproc)" V=s; then
+            echo "::warning::连接设备 IPK 编译失败，继续主固件编译和导出"
+          fi
 
 
       - name: 编译 OpenVPN 服务器自定义 LuCI IPK
         if: ${{ success() && inputs.build_openvpn_server_custom_ipk }}
-        run: make package/luci-app-openvpn-server-custom/compile -j"$(nproc)" V=s
+        run: |
+          if ! make package/luci-app-openvpn-server-custom/compile -j"$(nproc)" V=s; then
+            echo "::warning::OpenVPN 服务器自定义 LuCI IPK 编译失败，继续主固件编译和导出。"
+          fi
 
       - name: 收集发布固件
         if: ${{ success() }}
@@ -159,12 +165,14 @@ jobs:
         if: ${{ success() && inputs.build_openvpn_server_custom_ipk }}
         run: |
           ipk_count="$(find bin/packages -type f -name 'luci-app-openvpn-server-custom_*.ipk' | wc -l | tr -d '[:space:]')"
-          [ "$ipk_count" -eq 1 ] || {
-            echo "OpenVPN 服务器自定义 IPK 数量错误：应为 1，实际为 $ipk_count" >&2
-            exit 1
-          }
-          ipk="$(find bin/packages -type f -name 'luci-app-openvpn-server-custom_*.ipk' -print -quit)"
-          cp "$ipk" "artifacts/${{ matrix.target }}/"
+          if [ "$ipk_count" -eq 0 ]; then
+            echo "::warning::未找到 OpenVPN 服务器自定义 IPK，继续导出主固件。"
+          elif [ "$ipk_count" -eq 1 ]; then
+            ipk="$(find bin/packages -type f -name 'luci-app-openvpn-server-custom_*.ipk' -print -quit)"
+            cp "$ipk" "artifacts/${{ matrix.target }}/"
+          else
+            echo "::warning::找到 $ipk_count 个 OpenVPN 服务器自定义 IPK，跳过复制并继续导出主固件。"
+          fi
 
       - name: 上传构建产物
         if: ${{ success() && hashFiles('artifacts/**') != '' }}
@@ -203,7 +211,8 @@ jobs:
               *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
             esac
             [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && [ -n "$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)" ] && expected=$((expected + 1))
-            [ "$BUILD_OPENVPN_SERVER_CUSTOM_IPK" = "true" ] && expected=$((expected + 1))
+            openvpn_ipk_count="$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-openvpn-server-custom_*.ipk' | wc -l | tr -d '[:space:]')"
+            expected=$((expected + openvpn_ipk_count))
 
             for file in "$artifact_dir"/*; do
               [ -f "$file" ] || continue
