@@ -3,13 +3,6 @@
 MIRROR='https://mirrors.vsean.net/openwrt'
 ROOT_PASSWORD_HASH='$1$immortal$qSmS/2VYmMvAclD4gWaHO0'
 
-DNSMASQ_CONF='/etc/dnsmasq.conf'
-DNSMASQ_DIR='/etc/dnsmasq.d'
-mkdir -p "$DNSMASQ_DIR"
-#if [ ! -f "$DNSMASQ_CONF" ] || ! grep -qxF 'conf-dir=/etc/dnsmasq.d' "$DNSMASQ_CONF"; then
-#	printf '%s\n' 'conf-dir=/etc/dnsmasq.d' >> "$DNSMASQ_CONF"
-#fi
-
 uci -q get system.@imm_init[0] >/dev/null || uci -q add system imm_init >/dev/null
 
 uci -q batch <<EOF
@@ -28,6 +21,7 @@ case "$DISTRIB_TARGET" in
 		uci -q set dhcp.lan.ignore='1'
 		;;
 esac
+uci -q set dhcp.@dnsmasq[0].confdir='/etc/dnsmasq.d'
 uci -q commit dhcp
 uci -q commit system
 uci -q commit luci
