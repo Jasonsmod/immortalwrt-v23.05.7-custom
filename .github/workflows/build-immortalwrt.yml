@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       build_all:
-        description: 全选编译项目（选择单个或多个项目时请取消勾选）
+        description: 全选编译项目（未勾选具体项目时编译全部）
         required: false
         default: true
         type: boolean
@@ -83,18 +83,18 @@ jobs:
             targets="$(jq -c --arg target "$1" '. + [$target]' <<< "$targets")"
           }
 
-          if [ "$BUILD_ALL" = "true" ]; then
+          [ "$BUILD_R619AC" = "true" ] && add_target 'r619ac'
+          [ "$BUILD_X86" = "true" ] && add_target 'x86'
+          [ "$BUILD_X86_WITH_DOCKER" = "true" ] && add_target 'x86-docker'
+          [ "$BUILD_X86_64" = "true" ] && add_target 'x86_64'
+          [ "$BUILD_X86_64_WITH_DOCKER" = "true" ] && add_target 'x86_64-docker'
+
+          if [ "$targets" = '[]' ] && [ "$BUILD_ALL" = "true" ]; then
             add_target 'r619ac'
             add_target 'x86'
             add_target 'x86-docker'
             add_target 'x86_64'
             add_target 'x86_64-docker'
-          else
-            [ "$BUILD_R619AC" = "true" ] && add_target 'r619ac'
-            [ "$BUILD_X86" = "true" ] && add_target 'x86'
-            [ "$BUILD_X86_WITH_DOCKER" = "true" ] && add_target 'x86-docker'
-            [ "$BUILD_X86_64" = "true" ] && add_target 'x86_64'
-            [ "$BUILD_X86_64_WITH_DOCKER" = "true" ] && add_target 'x86_64-docker'
           fi
 
           if [ "$targets" = '[]' ]; then
