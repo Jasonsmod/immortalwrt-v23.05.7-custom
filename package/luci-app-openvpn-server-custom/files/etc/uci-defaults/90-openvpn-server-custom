@@ -15,6 +15,7 @@ fi
 
 uci -q get openvpn_server.main.auth_mode >/dev/null 2>&1 || uci -q set 'openvpn_server.main.auth_mode=cert'
 uci -q get openvpn_server.main.tunnel_type >/dev/null 2>&1 || uci -q set 'openvpn_server.main.tunnel_type=tun'
+uci -q get openvpn_server.main.bind_interface >/dev/null 2>&1 || uci -q set 'openvpn_server.main.bind_interface=wan'
 uci -q get openvpn_server.main.lzo >/dev/null 2>&1 || uci -q set 'openvpn_server.main.lzo=1'
 uci -q get openvpn_server.main.extra_config >/dev/null 2>&1 || uci -q set 'openvpn_server.main.extra_config='
 uci -q commit openvpn_server

@@ -31,7 +31,7 @@ end
 			</div>
 
 			<div class="cbi-value">
-				<label class="cbi-value-title" for="name">拨号名称</label>
+				<label class="cbi-value-title" for="name">配置名称</label>
 				<div class="cbi-value-field"><input id="name" name="name" type="text" maxlength="64"
 					value="<%=pcdata(profile.name)%>" required="required" /></div>
 			</div>
@@ -104,7 +104,7 @@ end
 			<div class="cbi-value">
 				<label class="cbi-value-title" for="tun_mtu">MTU</label>
 				<div class="cbi-value-field"><input id="tun_mtu" name="tun_mtu" type="number"
-					min="576" max="65535" value="<%=pcdata(profile.tun_mtu)%>" required="required" /></div>
+					min="576" max="65535" value="<%=pcdata(profile.tun_mtu)%>" /></div>
 			</div>
 			<div class="cbi-value">
 				<label class="cbi-value-title" for="ca">CA 证书</label>

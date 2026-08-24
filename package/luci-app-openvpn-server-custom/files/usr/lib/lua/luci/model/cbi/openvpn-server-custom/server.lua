@@ -1,5 +1,6 @@
 local fs = require "nixio.fs"
 local sys = require "luci.sys"
+local jsonc = require "luci.jsonc"
 local http = require "luci.http"
 local uci = require "luci.model.uci".cursor()
 
@@ -25,6 +26,26 @@ AES-256-CFB
 AES-128-OFB
 AES-192-OFB
 AES-256-OFB]]
+local public_interfaces = { "lan", "vpn0", "wan", "wan6", "wg0" }
+local network_interfaces = {}
+local network_dump = sys.exec("ubus call network.interface dump 2>/dev/null") or ""
+local network_ok, network_status = pcall(jsonc.parse, network_dump)
+if network_ok and type(network_status) == "table" and type(network_status.interface) == "table" then
+    for _, network_interface in ipairs(network_status.interface) do
+        if network_interface.interface then
+            network_interfaces[network_interface.interface] = network_interface
+        end
+    end
+end
+
+local function interface_address(interface)
+    local field = interface == "wan6" and "ipv6-address" or "ipv4-address"
+    local network_interface = network_interfaces[interface]
+    local addresses = network_interface and network_interface[field]
+    local address = type(addresses) == "table" and addresses[1]
+    return type(address) == "table" and address.address or ""
+end
+
 m = Map("openvpn_server", "OpenVPN 服务器",
 	"独立管理 OpenVPN 服务器和证书。服务器只有在 PKI 初始化完成后才会启动。")
 m.description = string.format("当前状态：%s；证书状态：%s。",
@@ -106,8 +127,19 @@ end
 data_cipher.default = selected_cipher
 data_cipher.rmempty = false
 
-remote = s:option(Value, "remote_host", "公网地址或 DDNS")
-remote.description = "生成客户端配置时写入的服务器地址。"
+bind_interface = s:option(ListValue, "bind_interface", "线路")
+for _, interface in ipairs(public_interfaces) do
+    local address = interface_address(interface)
+    local label = interface
+    if address ~= "" then
+        label = label .. "（" .. address .. "）"
+    end
+    bind_interface:value(interface, label)
+end
+bind_interface.default = "wan"
+bind_interface.rmempty = false
+
+remote = s:option(Value, "remote_host", "自定义 DDNS 地址")
 remote.rmempty = true
 
 lan_network = s:option(Value, "lan_network", "LAN 网络地址")

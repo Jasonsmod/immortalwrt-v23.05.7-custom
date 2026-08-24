@@ -232,7 +232,7 @@ build_active() {
 	bind_interface="$(uci -q get "$CONFIG.$id.bind_interface" || printf 'auto')"
 	cipher="$(uci -q get "$CONFIG.$id.data_cipher" || printf 'auto')"
 	lzo="$(uci -q get "$CONFIG.$id.lzo" || printf '1')"
-	mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || printf '1400')"
+	mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || true)"
 	auth_mode="$(uci -q get "$CONFIG.$id.auth_mode" || printf 'cert')"
 	tunnel_type="$(uci -q get "$CONFIG.$id.tunnel_type" || printf 'tun')"
 	accept_routes="$(uci -q get "$CONFIG.$id.accept_routes" || printf '1')"
@@ -259,7 +259,7 @@ build_active() {
 		printf '%s\n' 'resolv-retry infinite' 'nobind' 'persist-key' 'persist-tun' 'auth-nocache'
 		printf 'data-ciphers %s\n' "$cipher"
 		printf 'data-ciphers-fallback %s\n' "$cipher"
-		printf 'tun-mtu %s\n' "$mtu"
+		[ -z "$mtu" ] || printf 'tun-mtu %s\n' "$mtu"
 		[ -z "$bind_device" ] || printf 'bind-dev %s\n' "$bind_device"
 		[ "$lzo" = '0' ] || printf '%s\n' 'comp-lzo yes'
 		[ "$accept_routes" = '1' ] || printf '%s\n' 'route-nopull'
@@ -331,11 +331,10 @@ save_profile() {
 	[ -n "$bind_interface" ] || bind_interface='auto'
 	[ -n "$cipher" ] || cipher='auto'
 	[ -n "$lzo" ] || lzo='1'
-	[ -n "$mtu" ] || mtu='1400'
 	[ -n "$accept_routes" ] || accept_routes='1'
 	[ -n "$enabled" ] || enabled='0'
 
-	valid_single_line "$name" 64 || fail '拨号名称不能为空，且不能包含控制字符或竖线。'
+	valid_single_line "$name" 64 || fail '配置名称不能为空，且不能包含控制字符或竖线。'
 	valid_host "$host" || fail '服务器IP或域名格式无效。'
 	valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '服务器端口无效。'
 	case "$proto" in udp|tcp-client) ;; *) fail '隧道协议无效。' ;; esac
@@ -344,7 +343,10 @@ save_profile() {
 	valid_interface "$bind_interface" || fail '出口线路名称无效。'
 	valid_bool "$lzo" || fail 'LZO选项无效。'
 	[ "$lzo" = '0' ] || supported_lzo || fail '当前OpenVPN未编译LZO压缩支持。'
-	valid_uint "$mtu" && [ "$mtu" -ge 576 ] && [ "$mtu" -le 65535 ] || fail 'MTU必须在576到65535之间。'
+	if [ -n "$mtu" ]; then
+	valid_uint "$mtu" && [ "$mtu" -ge 576 ] && [ "$mtu" -le 65535 ] ||
+		fail 'MTU必须在576到65535之间。'
+fi
 	valid_bool "$accept_routes" || fail '服务器路由推送选项无效。'
 	valid_bool "$enabled" || fail '启用状态无效。'
 	case "$cipher" in
@@ -448,8 +450,8 @@ import_profile() {
 	printf '%s\n' 'cert' > "$staging/auth_mode"
 	printf '%s\n' 'auto' > "$staging/bind_interface"
 	printf '%s\n' 'auto' > "$staging/data_cipher"
-	printf '%s\n' '1' > "$staging/lzo"
-	printf '%s\n' '1400' > "$staging/tun_mtu"
+	printf '%s\n' '0' > "$staging/lzo"
+	: > "$staging/tun_mtu"
 	printf '%s\n' '1' > "$staging/accept_routes"
 	printf '%s\n' '0' > "$staging/enabled"
 

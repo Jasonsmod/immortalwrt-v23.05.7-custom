@@ -115,7 +115,7 @@ local function profile_data(id)
 		bind_interface = "auto",
 		data_cipher = "auto",
 		lzo = "1",
-		tun_mtu = "1400",
+		tun_mtu = "",
 		accept_routes = "1",
 		enabled = "0",
 		username = "",
@@ -447,13 +447,6 @@ function server_export()
 		http.write("请先初始化CA和服务器证书。\n")
 		return
 	end
-	if not sys.exec("uci -q get openvpn_server.main.remote_host 2>/dev/null"):match("%S") then
-		http.status(409, "Conflict")
-		http.prepare_content("text/plain; charset=utf-8")
-		http.write("请先在服务器设置中填写公网地址或DDNS。\n")
-		return
-	end
-
 	local quoted = util.shellquote(name)
 	if needs_certificate and not fs.access("/etc/easy-rsa/pki/issued/" .. name .. ".crt") then
 		local result = sys.exec(SERVER_MANAGER .. " create-client " .. quoted .. " 2>&1")

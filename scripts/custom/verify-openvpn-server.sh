@@ -92,6 +92,14 @@ require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "both")'
 require_text "$SERVER_MODEL" 'lzo.default = "1"'
 require_text "$SERVER_MODEL" 'cpu_supports_aes'
 require_text "$SERVER_MODEL" 'data_cipher.default = selected_cipher'
+require_text "$SERVER_MODEL" 'local jsonc = require "luci.jsonc"'
+require_text "$SERVER_MODEL" 'bind_interface = s:option(ListValue, "bind_interface", "线路")'
+require_text "$SERVER_MODEL" 'remote = s:option(Value, "remote_host", "自定义 DDNS 地址")'
+require_text "$MANAGER" 'valid_remote_interface'
+require_text "$MANAGER" 'interface_address'
+require_text "$MANAGER" 'remote $remote_host $port'
+require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option bind_interface 'wan'"
+require_text "$DEFAULTS" "main.bind_interface=wan"
 require_text "$ACTIONS_TEMPLATE" '导出 Windows 客户端配置'
 require_text "$ACTIONS_TEMPLATE" 'if not self.pki_ready then'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-server-manager'
@@ -130,6 +138,13 @@ require_text "$CLIENT_MANAGER" 'enable|disable|delete'
 require_text "$CLIENT_MANAGER" 'openvpn.client_$id.config'
 require_text "$CLIENT_MANAGER" 'bind-dev'
 require_text "$CLIENT_MANAGER" 'BF-*'
+require_text "$CLIENT_MANAGER" "printf '%s\n' '0' > \"\$staging/lzo\""
+require_text "$CLIENT_EDIT_TEMPLATE" '配置名称'
+require_text "$CLIENT_MANAGER" 'if [ -n "$mtu" ]; then'
+require_text "$CLIENT_MANAGER" 'mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || true)"'
+require_text "$CLIENT_MANAGER" '[ -z "$mtu" ]'
+require_text "$CLIENT_MANAGER" ': > "$staging/tun_mtu"'
+require_text "$CONTROLLER" 'tun_mtu = ""'
 
 if grep -Eq 'sys\.exec\(manager.*(list-ciphers|recommended-cipher)' "$SERVER_MODEL"; then
 	fail_check '服务端页面不应在加载时执行算法探测。'
@@ -139,11 +154,18 @@ if grep -Fq 'manager_command("list-ciphers")' "$CONTROLLER"; then
 	fail_check '客户端编辑页面不应在加载时执行算法探测。'
 fi
 
+if grep -Fq '请先在服务器设置中填写公网地址或DDNS。' "$CONTROLLER"; then
+	fail_check '客户端导出不应强制要求填写自定义 DDNS。'
+fi
+
+if grep -Fq '拨号名称' "$CLIENT_EDIT_TEMPLATE" || grep -Fq '拨号名称' "$CLIENT_LIST_TEMPLATE" || grep -Fq '拨号名称' "$CLIENT_MANAGER"; then
+	fail_check '客户端页面仍使用旧的“拨号名称”文案。'
+fi
 if grep -Eq 'BF 系列算法不允许使用|压缩可能带来安全风险|>TUN</div>' "$CLIENT_EDIT_TEMPLATE"; then
 	fail_check '客户端添加页仍包含已移除的提示或固定 TUN 控件。'
 fi
 
-if grep -Eq 'DES-|RC2-|SEED-|CAST5-|CFB1|CFB8|certificate_status|auth_mode\.description|lzo\.description|extra_config\.description' "$SERVER_MODEL"; then
+if grep -Eq 'DES-|RC2-|SEED-|CAST5-|CFB1|CFB8|certificate_status|auth_mode\.description|lzo\.description|extra_config\.description|生成客户端配置时写入的服务器地址' "$SERVER_MODEL"; then
 	fail_check '服务端设置页仍包含已移除的算法或冗余提示。'
 fi
 require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option lzo '1'"

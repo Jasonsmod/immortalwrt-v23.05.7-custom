@@ -163,6 +163,26 @@ valid_remote_host() {
 		*) return 0 ;;
 	esac
 }
+valid_remote_interface() {
+	case "$1" in
+		lan|vpn0|wan|wan6|wg0) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+interface_address() {
+	local interface="$1" field address
+	valid_remote_interface "$interface" || return 1
+	if [ "$interface" = 'wan6' ]; then
+		field='ipv6-address'
+	else
+		field='ipv4-address'
+	fi
+	address="$(ubus call "network.interface.$interface" status 2>/dev/null |
+		jsonfilter -e "@.$field[0].address" 2>/dev/null || true)"
+	[ -n "$address" ] || return 1
+	printf '%s\n' "$address"
+}
 valid_cidr() {
     local route network prefix
     route="$1"
@@ -367,7 +387,7 @@ EOF_ROUTES
 }
 
 apply_configuration() {
-    local enabled proto port remote_host vpn_network vpn_netmask
+    local enabled proto port remote_host bind_interface vpn_network vpn_netmask
     local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
     local auth_mode tunnel_type tunnel_device lzo extra_config route
 
@@ -375,6 +395,7 @@ apply_configuration() {
     proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
     port="$(uci -q get openvpn_server.main.port || printf '1194')"
     remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
+    bind_interface="$(uci -q get openvpn_server.main.bind_interface || printf 'wan')"
     vpn_network="$(uci -q get openvpn_server.main.vpn_network || printf '10.8.0.0')"
     vpn_netmask="$(uci -q get openvpn_server.main.vpn_netmask || printf '255.255.255.0')"
     lan_network="$(uci -q get openvpn_server.main.lan_network || printf '192.168.50.0')"
@@ -396,7 +417,8 @@ apply_configuration() {
     valid_tunnel_type "$tunnel_type" || fail '隧道类型只能是 TUN 或 TAP。'
     valid_boolean "$lzo" || fail 'LZO 开关值无效。'
     valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '端口必须在 1 到 65535 之间。'
-    [ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '公网地址格式无效。'
+    valid_remote_interface "$bind_interface" || fail '线路配置无效。'
+    [ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '自定义 DDNS 地址格式无效。'
     valid_ipv4 "$vpn_network" || fail 'VPN 网络地址格式无效。'
     valid_ipv4 "$vpn_netmask" || fail 'VPN 子网掩码格式无效。'
     valid_ipv4 "$lan_network" || fail 'LAN 网络地址格式无效。'
@@ -597,7 +619,7 @@ list_clients() {
 }
 
 export_client() {
-    local remote_host port proto auth_mode tunnel_type lzo data_cipher
+    local remote_host bind_interface port proto auth_mode tunnel_type lzo data_cipher
 
     auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
     tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
@@ -611,9 +633,15 @@ export_client() {
         valid_client_name "$CLIENT_NAME" || fail '客户端名称无效。'
     fi
     remote_host="$(uci -q get openvpn_server.main.remote_host || true)"
+    bind_interface="$(uci -q get openvpn_server.main.bind_interface || printf 'wan')"
     port="$(uci -q get openvpn_server.main.port || printf '1194')"
     proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
-    valid_remote_host "$remote_host" || fail '请先在服务器设置中填写公网地址或DDNS。'
+    valid_remote_interface "$bind_interface" || fail '线路配置无效。'
+    if [ -z "$remote_host" ]; then
+        remote_host="$(interface_address "$bind_interface" || true)"
+        [ -n "$remote_host" ] || fail "无法获取线路$bind_interface的IP地址。"
+    fi
+    valid_remote_host "$remote_host" || fail '自定义 DDNS 地址格式无效。'
     case "$proto" in
         tcp-server) proto='tcp-client' ;;
         udp) ;;
