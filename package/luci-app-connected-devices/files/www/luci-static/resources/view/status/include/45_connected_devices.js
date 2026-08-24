@@ -5,61 +5,95 @@
 var callConnectedDevices = rpc.declare({
 	object: 'luci.connected-devices',
 	method: 'getDevices',
-	expect: { devices: [] }
+	expect: { '': {} }
 });
 
 function statusText(state) {
 	switch (state) {
 	case 'associated':
-		return _('ÒÑÁ¬½Ó');
+		return _('å·²è¿æ¥');
 	case 'reachable':
-		return _('»îÔ¾');
+	case 'delay':
+	case 'probe':
+		return _('åœ¨çº¿');
+	case 'permanent':
+		return _('å›ºå®šé‚»å±…');
 	case 'stale':
-		return _('½üÆÚ¿É¼û');
+		return _('æœ€è¿‘åœ¨çº¿');
 	case 'dhcp':
-		return _('DHCP ×âÔ¼');
+		return _('DHCP ç§Ÿçº¦');
+	case 'static':
+		return _('å›ºå®šåœ°å€');
 	default:
-		return state || _('Î´Öª');
+		return state || _('æœªçŸ¥');
 	}
 }
 
 function typeText(type) {
-	return type == 'wifi' ? _('WIFI') : _('LAN');
+	return type == 'wifi' ? _('Wi-Fi') : _('LAN');
+}
+
+function renderAddress(device) {
+	var type = typeText(device.type);
+	var icon = device.type == 'wifi' ? 'icons/wifi.png' : 'icons/ethernet.png';
+
+	return E('span', {
+		'class': 'ifacebadge',
+		'title': type
+	}, [
+		E('img', {
+			'src': L.resource(icon),
+			'alt': type
+		}),
+		E('span', {}, [ ' ', device.ip || '-' ])
+	]);
 }
 
 return baseclass.extend({
-	title: '',
+	title: _('è¿æ¥è®¾å¤‡'),
 
 	load: function() {
-		return callConnectedDevices();
+		return callConnectedDevices().catch(function(error) {
+			return {
+				devices: [],
+				error: error && error.message ? error.message : String(error)
+			};
+		});
 	},
 
 	render: function(data) {
-		var devices = Array.isArray(data) ? data : [];
+		data = data || {};
+		var devices = Array.isArray(data.devices) ? data.devices : [];
 		var table = E('table', { 'class': 'table connected-devices' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, _('IP µØÖ·')),
-				E('th', { 'class': 'th' }, _('MAC µØÖ·')),
-				E('th', { 'class': 'th' }, _('½ÓÈëÀàĞÍ')),
-				E('th', { 'class': 'th' }, _('½Ó¿Ú')),
-				E('th', { 'class': 'th' }, _('×´Ì¬'))
+				E('th', { 'class': 'th' }, _('è®¾å¤‡åç§°')),
+				E('th', { 'class': 'th' }, _('IP åœ°å€')),
+				E('th', { 'class': 'th' }, _('MAC åœ°å€')),
+				E('th', { 'class': 'th' }, _('è¿æ¥æ–¹å¼')),
+				E('th', { 'class': 'th' }, _('æ¥å£')),
+				E('th', { 'class': 'th' }, _('çŠ¶æ€'))
 			])
 		]);
 
 		cbi_update_table(table, devices.map(function(device) {
 			return [
-				device.ip || '-',
+				device.hostname || '-',
+				renderAddress(device),
 				device.mac || '-',
 				typeText(device.type),
 				device.interface || '-',
 				statusText(device.state)
 			];
-		}), E('em', _('ÔİÎŞ¼ì²âµ½Á¬½ÓÉè±¸')));
+		}), E('em', _('å½“å‰æœªæ£€æµ‹åˆ°è¿æ¥è®¾å¤‡')));
 
 		return E([
-			E('h3', _('Á¬½ÓµÄÉè±¸')),
+			data.error ? E('div', { 'class': 'alert-message warning' }, [
+				_('è¿æ¥è®¾å¤‡åç«¯æš‚æ—¶ä¸å¯ç”¨ï¼š%s').format(data.error)
+			]) : E([]),
 			table,
-			E('p', { 'class': 'cbi-section-descr' }, _('¾²Ì¬ IP Éè±¸ĞèÏÈ²úÉúÍøÂçÍ¨ĞÅ£¬²ÅÄÜ³öÏÖÔÚÁÚ¾Ó±íÖĞ¡£'))
+			E('p', { 'class': 'cbi-section-descr' }, [
+				_('å›ºå®š DHCP åœ°å€ä¼šç›´æ¥åˆ—å‡ºï¼›æ‰‹åŠ¨é™æ€ IP è®¾å¤‡éœ€è¦æ›¾ä¸è·¯ç”±å™¨é€šä¿¡ï¼Œæ‰èƒ½ä»é‚»å±…è¡¨ä¸­è¯†åˆ«ã€‚')
+			])
 		]);
 	}
 });

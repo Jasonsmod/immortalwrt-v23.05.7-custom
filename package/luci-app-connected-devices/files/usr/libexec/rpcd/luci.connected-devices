@@ -3,6 +3,20 @@
 local jsonc = require "luci.jsonc"
 local sys = require "luci.sys"
 local util = require "luci.util"
+local uci = require "luci.model.uci"
+
+local state_priority = {
+	unknown = 0,
+	static = 10,
+	dhcp = 20,
+	stale = 30,
+	delay = 40,
+	probe = 40,
+	permanent = 50,
+	noarp = 50,
+	reachable = 60,
+	associated = 70
+}
 
 local function parse_json(command)
 	local output = sys.exec(command .. " 2>/dev/null")
@@ -22,7 +36,28 @@ local function normalize_mac(mac)
 	return string.upper(mac or "")
 end
 
+local function valid_ipv4(ip)
+	if type(ip) ~= "string" then
+		return false
+	end
+
+	local count = 0
+	for part in ip:gmatch("[^.]+") do
+		local value = tonumber(part)
+		if not value or value < 0 or value > 255 then
+			return false
+		end
+		count = count + 1
+	end
+
+	return count == 4
+end
+
 local function add_source(device, source)
+	if not source or source == "" then
+		return
+	end
+
 	for _, existing in ipairs(device.source) do
 		if existing == source then
 			return
@@ -32,45 +67,63 @@ local function add_source(device, source)
 	device.source[#device.source + 1] = source
 end
 
-local function add_device(devices, by_mac, mac, ip, interface, device_type, state, source, hostname)
-	if not valid_mac(mac) then
+local function add_device(devices, by_mac, data)
+	if not valid_mac(data.mac) then
 		return
 	end
 
-	mac = normalize_mac(mac)
+	local mac = normalize_mac(data.mac)
 	local device = by_mac[mac]
+	local ip_priority = data.ip_priority or 0
+	local interface_priority = data.interface_priority or 0
+	local hostname_priority = data.hostname_priority or 0
+	local new_state_priority = state_priority[data.state or "unknown"] or 0
+
 	if not device then
 		device = {
-			ip = ip or "",
+			ip = "",
 			mac = mac,
-			interface = interface or "",
-			type = device_type or "lan",
-			state = state or "unknown",
-			hostname = hostname or "",
-			source = {}
+			hostname = "",
+			interface = "",
+			type = data.type or "lan",
+			state = data.state or "unknown",
+			source = {},
+			_ip_priority = -1,
+			_interface_priority = -1,
+			_hostname_priority = -1,
+			_state_priority = -1
 		}
 		by_mac[mac] = device
 		devices[#devices + 1] = device
-	else
-		if device.ip == "" and ip and ip ~= "" then
-			device.ip = ip
-		end
-		if hostname and hostname ~= "" and device.hostname == "" then
-			device.hostname = hostname
-		end
-		if device_type == "wifi" then
-			device.type = "wifi"
-			device.interface = interface or device.interface
-			device.state = "associated"
-		elseif device.interface == "" then
-			device.interface = interface or ""
-		end
-		if state == "reachable" or state == "associated" then
-			device.state = state
-		end
 	end
 
-	add_source(device, source)
+	if valid_ipv4(data.ip) and ip_priority >= device._ip_priority then
+		device.ip = data.ip
+		device._ip_priority = ip_priority
+	end
+
+	if data.hostname and data.hostname ~= "" and data.hostname ~= "*" and
+		hostname_priority >= device._hostname_priority then
+		device.hostname = data.hostname
+		device._hostname_priority = hostname_priority
+	end
+
+	if data.interface and data.interface ~= "" and
+		interface_priority >= device._interface_priority then
+		device.interface = data.interface
+		device._interface_priority = interface_priority
+	end
+
+	if data.type == "wifi" then
+		device.type = "wifi"
+	end
+
+	if new_state_priority >= device._state_priority then
+		device.state = data.state or "unknown"
+		device._state_priority = new_state_priority
+	end
+
+	add_source(device, data.source)
 end
 
 local function collect_network_devices()
@@ -80,10 +133,10 @@ local function collect_network_devices()
 
 	if dump and type(dump.interface) == "table" then
 		for _, interface in ipairs(dump.interface) do
-			local name = interface.interface or ""
+			local name = type(interface.interface) == "string" and interface.interface or ""
 			local l3_device = interface.l3_device or interface.device
 
-			if l3_device and l3_device ~= "" then
+			if type(l3_device) == "string" and l3_device ~= "" then
 				if name == "wan" or name:match("^wan") or name == "loopback" then
 					excluded[l3_device] = true
 				elseif name == "lan" or name:match("^lan") or l3_device:match("^br%-") then
@@ -93,85 +146,246 @@ local function collect_network_devices()
 		end
 	end
 
+	for interface in pairs(excluded) do
+		allowed[interface] = nil
+	end
+
 	if next(allowed) == nil then
 		allowed["br-lan"] = true
 	end
 
-	return allowed, excluded
+	local names = {}
+	for interface in pairs(allowed) do
+		names[#names + 1] = interface
+	end
+	table.sort(names)
+
+	local default_interface = allowed["br-lan"] and "br-lan" or names[1]
+	return allowed, excluded, default_interface
 end
 
 local function collect_wifi_interfaces()
 	local interfaces = {}
 	local state = parse_json("ubus call network.wireless status")
 
-	if not state then
-		return interfaces
-	end
-
-	for _, radio in pairs(state) do
-		if type(radio) == "table" and type(radio.interfaces) == "table" then
-			for _, interface in ipairs(radio.interfaces) do
-				if type(interface) == "table" and interface.ifname and interface.ifname ~= "" then
-					interfaces[interface.ifname] = true
+	if state then
+		for _, radio in pairs(state) do
+			if type(radio) == "table" and type(radio.interfaces) == "table" then
+				for _, interface in ipairs(radio.interfaces) do
+					if type(interface) == "table" and type(interface.ifname) == "string" and
+						interface.ifname ~= "" then
+						interfaces[interface.ifname] = true
+					end
 				end
 			end
+		end
+	end
+
+	for object in sys.exec("ubus list 'hostapd.*' 2>/dev/null"):gmatch("[^\r\n]+") do
+		local interface = object:match("^hostapd%.(.+)$")
+		if interface and interface ~= "" then
+			interfaces[interface] = true
 		end
 	end
 
 	return interfaces
 end
 
-local function collect_devices()
-	local devices = {}
-	local by_mac = {}
-	local allowed, excluded = collect_network_devices()
-
-	for line in sys.exec("ip -4 neigh show"):gmatch("[^\r\n]+") do
+local function collect_neighbor_devices(devices, by_mac, allowed, excluded)
+	for line in sys.exec("ip -4 neigh show 2>/dev/null"):gmatch("[^\r\n]+") do
 		local ip, interface, mac, state = line:match("^(%S+)%s+dev%s+(%S+).-[Ll][Ll]addr%s+(%S+)%s+(%S+)")
 		if ip and interface and mac and not excluded[interface] and
-			(allowed[interface] or interface:match("^br%-")) then
-			if state ~= "FAILED" and state ~= "INCOMPLETE" then
-				add_device(devices, by_mac, mac, ip, interface, "lan", string.lower(state), "neighbor")
-			end
+			(allowed[interface] or interface:match("^br%-")) and
+			state ~= "FAILED" and state ~= "INCOMPLETE" then
+			add_device(devices, by_mac, {
+				ip = ip,
+				mac = mac,
+				interface = interface,
+				type = "lan",
+				state = string.lower(state),
+				source = "neighbor",
+				ip_priority = 30,
+				interface_priority = 30
+			})
 		end
 	end
 
-	local lan_interface = next(allowed) or "br-lan"
+	local arp = io.open("/proc/net/arp", "r")
+	if arp then
+		for line in arp:lines() do
+			local ip, hw_type, flags, mac, mask, interface = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+			if valid_ipv4(ip) and flags ~= "0x0" and valid_mac(mac) and interface and
+				not excluded[interface] and (allowed[interface] or interface:match("^br%-")) then
+				add_device(devices, by_mac, {
+					ip = ip,
+					mac = mac,
+					interface = interface,
+					type = "lan",
+					state = "reachable",
+					source = "neighbor",
+					ip_priority = 30,
+					interface_priority = 30
+				})
+			end
+		end
+		arp:close()
+	end
+end
+
+local function collect_dhcp_leases(devices, by_mac, default_interface)
 	local leases = io.open("/tmp/dhcp.leases", "r")
-	if leases then
-		for line in leases:lines() do
-			local _, mac, ip, hostname = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
-			if ip and ip ~= "*" then
-				add_device(devices, by_mac, mac, ip, lan_interface, "lan", "dhcp", "dhcp", hostname)
-			end
-		end
-		leases:close()
+	if not leases then
+		return
 	end
 
+	for line in leases:lines() do
+		local expiry, mac, ip, hostname = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+		if valid_ipv4(ip) then
+			add_device(devices, by_mac, {
+				ip = ip,
+				mac = mac,
+				hostname = hostname,
+				interface = default_interface,
+				type = "lan",
+				state = "dhcp",
+				source = "dhcp",
+				ip_priority = 40,
+				hostname_priority = 40,
+				interface_priority = 10
+			})
+		end
+	end
+
+	leases:close()
+end
+
+local function each_mac(value, callback)
+	if type(value) == "table" then
+		for _, mac in ipairs(value) do
+			each_mac(mac, callback)
+		end
+	elseif type(value) == "string" then
+		for mac in value:gmatch("[^,%s]+") do
+			callback(mac)
+		end
+	end
+end
+
+local function collect_static_leases(devices, by_mac, default_interface)
+	local cursor = uci.cursor()
+	local ok = pcall(function()
+		cursor:foreach("dhcp", "host", function(section)
+			if valid_ipv4(section.ip) then
+				each_mac(section.mac, function(mac)
+					add_device(devices, by_mac, {
+						ip = section.ip,
+						mac = mac,
+						hostname = section.name,
+						interface = default_interface,
+						type = "lan",
+						state = "static",
+						source = "static",
+						ip_priority = 10,
+						hostname_priority = 30,
+						interface_priority = 10
+					})
+				end)
+			end
+		end)
+	end)
+
+	pcall(cursor.unload, cursor, "dhcp")
+	return ok
+end
+
+local function add_wifi_client(devices, by_mac, interface, mac)
+	add_device(devices, by_mac, {
+		mac = mac,
+		interface = interface,
+		type = "wifi",
+		state = "associated",
+		source = "wifi",
+		interface_priority = 50
+	})
+end
+
+local function collect_wifi_clients(devices, by_mac)
 	for interface in pairs(collect_wifi_interfaces()) do
 		local args = util.shellquote(jsonc.stringify({ device = interface }))
 		local result = parse_json("ubus call iwinfo assoclist " .. args)
+
 		if result and type(result.results) == "table" then
-			for _, client in ipairs(result.results) do
-				local mac = client.mac or client.addr
-				add_device(devices, by_mac, mac, nil, interface, "wifi", "associated", "wifi")
+			for key, client in pairs(result.results) do
+				if type(client) == "table" then
+					local mac = client.mac or client.addr or (valid_mac(key) and key or nil)
+					add_wifi_client(devices, by_mac, interface, mac)
+				end
+			end
+		end
+
+		local object = util.shellquote("hostapd." .. interface)
+		local clients = parse_json("ubus call " .. object .. " get_clients '{}'")
+		if clients and type(clients.clients) == "table" then
+			for mac in pairs(clients.clients) do
+				add_wifi_client(devices, by_mac, interface, mac)
 			end
 		end
 	end
+end
+
+local function ipv4_sort_key(ip)
+	if not valid_ipv4(ip) then
+		return "~"
+	end
+
+	local parts = {}
+	for part in ip:gmatch("[^.]+") do
+		parts[#parts + 1] = string.format("%03d", tonumber(part))
+	end
+	return table.concat(parts, ".")
+end
+
+local function collect_devices()
+	local devices = {}
+	local by_mac = {}
+	local allowed, excluded, default_interface = collect_network_devices()
+
+	collect_static_leases(devices, by_mac, default_interface)
+	collect_neighbor_devices(devices, by_mac, allowed, excluded)
+	collect_dhcp_leases(devices, by_mac, default_interface)
+	collect_wifi_clients(devices, by_mac)
+
+	for _, device in ipairs(devices) do
+		device._ip_priority = nil
+		device._interface_priority = nil
+		device._hostname_priority = nil
+		device._state_priority = nil
+	end
 
 	table.sort(devices, function(a, b)
-		local aip = a.ip ~= "" and a.ip or "~"
-		local bip = b.ip ~= "" and b.ip or "~"
+		local aip = ipv4_sort_key(a.ip)
+		local bip = ipv4_sort_key(b.ip)
 		return aip == bip and a.mac < b.mac or aip < bip
 	end)
 
 	return devices
 end
 
+local function drain_stdin()
+	while io.read(4096) do
+	end
+end
+
 if arg[1] == "list" then
 	print('{"getDevices":{}}')
 elseif arg[1] == "call" and arg[2] == "getDevices" then
-	print(jsonc.stringify({ devices = collect_devices() }))
+	drain_stdin()
+	local ok, devices = pcall(collect_devices)
+	if ok then
+		print(jsonc.stringify({ devices = devices }))
+	else
+		print(jsonc.stringify({ devices = {}, error = tostring(devices) }))
+	end
 else
 	os.exit(1)
 end
