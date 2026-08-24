@@ -28,7 +28,7 @@ UPDATE_PACKAGE "ddns-scripts-aliyun" "sbwml/openwrt-package" "main" "ddns-script
 UPDATE_PACKAGE "diskmanager" "4IceG/luci-app-mini-diskmanager" "main"
 UPDATE_PACKAGE "easytier" "EasyTier/luci-app-easytier" "main"
 UPDATE_PACKAGE "luci-app-mosdns" "sbwml/luci-app-mosdns" "v5" "luci-app-mosdns"
-UPDATE_PACKAGE "v2dat" "sbwml/luci-app-mosdns" "v5" "v2dat"
+UPDATE_PACKAGE "geo2txt" "sbwml/luci-app-mosdns" "v5" "geo2txt"
 MOSDNS_BASIC_JS="$CUSTOM_PACKAGE_DIR/luci-app-mosdns/htdocs/luci-static/resources/view/mosdns/basic.js"
 [ -f "$MOSDNS_BASIC_JS" ] || fail "luci-app-mosdns 缺少 LuCI 页面资源 basic.js"
 UPDATE_PACKAGE "netwizard" "sirpdboy/luci-app-netwizard" "main"
