@@ -18,7 +18,17 @@ local state_priority = {
 	associated = 70
 }
 
+local timeout_available
+
 local function parse_json(command)
+	if timeout_available == nil then
+		timeout_available = sys.exec("command -v timeout 2>/dev/null") ~= ""
+	end
+
+	if timeout_available then
+		command = "timeout 2 " .. command
+	end
+
 	local output = sys.exec(command .. " 2>/dev/null")
 	if not output or #output == 0 then
 		return nil
@@ -26,6 +36,10 @@ local function parse_json(command)
 
 	local ok, value = pcall(jsonc.parse, output)
 	return ok and value or nil
+end
+
+local function safe_collect(collector, ...)
+	pcall(collector, ...)
 end
 
 local function valid_mac(mac)
@@ -233,6 +247,29 @@ local function collect_neighbor_devices(devices, by_mac, allowed, excluded)
 end
 
 local function collect_dhcp_leases(devices, by_mac, default_interface)
+	local rpc_leases = parse_json("ubus call luci-rpc getDHCPLeases")
+	local leases_from_rpc = rpc_leases and rpc_leases.dhcp_leases
+	if type(leases_from_rpc) == "table" then
+		for _, lease in ipairs(leases_from_rpc) do
+			local ip = lease.ipaddr or lease.ip
+			local mac = lease.macaddr or lease.mac
+			if valid_ipv4(ip) then
+				add_device(devices, by_mac, {
+					ip = ip,
+					mac = mac,
+					hostname = lease.hostname,
+					interface = default_interface,
+					type = "lan",
+					state = "dhcp",
+					source = "dhcp",
+					ip_priority = 40,
+					hostname_priority = 40,
+					interface_priority = 10
+				})
+			end
+		end
+	end
+
 	local leases = io.open("/tmp/dhcp.leases", "r")
 	if not leases then
 		return
@@ -348,12 +385,20 @@ end
 local function collect_devices()
 	local devices = {}
 	local by_mac = {}
-	local allowed, excluded, default_interface = collect_network_devices()
+	local allowed, excluded, default_interface
+	local ok = pcall(function()
+		allowed, excluded, default_interface = collect_network_devices()
+	end)
+	if not ok or type(allowed) ~= "table" or type(excluded) ~= "table" then
+		allowed = { ["br-lan"] = true }
+		excluded = {}
+		default_interface = "br-lan"
+	end
 
-	collect_static_leases(devices, by_mac, default_interface)
-	collect_neighbor_devices(devices, by_mac, allowed, excluded)
-	collect_dhcp_leases(devices, by_mac, default_interface)
-	collect_wifi_clients(devices, by_mac)
+	safe_collect(collect_static_leases, devices, by_mac, default_interface)
+	safe_collect(collect_neighbor_devices, devices, by_mac, allowed, excluded)
+	safe_collect(collect_dhcp_leases, devices, by_mac, default_interface)
+	safe_collect(collect_wifi_clients, devices, by_mac)
 
 	for _, device in ipairs(devices) do
 		device._ip_priority = nil

@@ -8,6 +8,8 @@ var callConnectedDevices = rpc.declare({
 	expect: { '': {} }
 });
 
+var connectedDevicesTimeout = 3000;
+
 function statusText(state) {
 	switch (state) {
 	case 'associated':
@@ -53,12 +55,21 @@ return baseclass.extend({
 	title: _('连接设备'),
 
 	load: function() {
-		return callConnectedDevices().catch(function(error) {
+		var request = callConnectedDevices().catch(function(error) {
 			return {
 				devices: [],
 				error: error && error.message ? error.message : String(error)
 			};
 		});
+		var timeout = new Promise(function(resolve) {
+			setTimeout(function() {
+				resolve({
+					devices: [],
+					error: _("读取连接设备超时")
+				});
+			}, connectedDevicesTimeout);
+		});
+		return Promise.race([ request, timeout ]);
 	},
 
 	render: function(data) {
