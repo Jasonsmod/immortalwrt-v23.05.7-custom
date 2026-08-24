@@ -179,10 +179,11 @@ interface_address() {
 		field='ipv4-address'
 	fi
 	address="$(ubus call "network.interface.$interface" status 2>/dev/null |
-		jsonfilter -e "@.$field[0].address" 2>/dev/null || true)"
+		jsonfilter -e "@['$field'][0].address" 2>/dev/null || true)"
 	[ -n "$address" ] || return 1
 	printf '%s\n' "$address"
 }
+
 valid_cidr() {
     local route network prefix
     route="$1"

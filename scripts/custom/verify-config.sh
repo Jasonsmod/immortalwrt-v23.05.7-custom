@@ -30,7 +30,15 @@ reject_symbol() {
 case "$target" in
 	r619ac) require_symbol CONFIG_TARGET_ipq40xx_generic_DEVICE_p2w_r619ac-128m ;;
 	x86) require_symbol CONFIG_TARGET_x86_generic_DEVICE_generic ;;
+	x86-docker)
+		require_symbol CONFIG_TARGET_x86_generic_DEVICE_generic
+		require_symbol CONFIG_PACKAGE_dockerd
+		;;
 	x86_64) require_symbol CONFIG_TARGET_x86_64_DEVICE_generic ;;
+	x86_64-docker)
+		require_symbol CONFIG_TARGET_x86_64_DEVICE_generic
+		require_symbol CONFIG_PACKAGE_dockerd
+		;;
 	*) printf '错误：未知目标 %s。\n' "$target" >&2; exit 1 ;;
 esac
 

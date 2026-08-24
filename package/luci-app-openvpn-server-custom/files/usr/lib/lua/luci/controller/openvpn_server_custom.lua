@@ -458,11 +458,15 @@ function server_export()
 		end
 	end
 
-	local profile = sys.exec(SERVER_MANAGER .. " export-client " .. quoted .. " 2>/dev/null")
+	local profile = sys.exec(SERVER_MANAGER .. " export-client " .. quoted .. " 2>&1")
 	if not profile:match("^client\n") then
 		http.status(409, "Conflict")
 		http.prepare_content("text/plain; charset=utf-8")
-		http.write("无法生成客户端配置，证书可能已吊销或配置尚未完善。\n")
+		if profile:match("^错误：") then
+			http.write(profile)
+		else
+			http.write("无法生成客户端配置，证书可能已吊销或配置尚未完善。\n")
+		end
 		return
 	end
 

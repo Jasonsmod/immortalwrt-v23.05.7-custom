@@ -3,16 +3,36 @@ name: 编译 ImmortalWrt 23.05.7
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: 选择固件目标
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - r619ac
-          - x86
-          - x86_64
+      build_all:
+        description: 全选编译项目（选择单个或多个项目时请取消勾选）
+        required: false
+        default: true
+        type: boolean
+      build_r619ac:
+        description: 编译 r619ac
+        required: false
+        default: false
+        type: boolean
+      build_x86:
+        description: 编译 x86
+        required: false
+        default: false
+        type: boolean
+      build_x86_with_docker:
+        description: 编译 x86 with docker
+        required: false
+        default: false
+        type: boolean
+      build_x86_64:
+        description: 编译 x86_64
+        required: false
+        default: false
+        type: boolean
+      build_x86_64_with_docker:
+        description: 编译 x86_64 with docker
+        required: false
+        default: false
+        type: boolean
       ssh:
         description: 编译前启用仅发起者可访问的 SSH 调试
         required: false
@@ -40,14 +60,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  select_targets:
+    name: 选择编译项目
+    runs-on: ubuntu-22.04
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - name: 生成编译项目矩阵
+        id: targets
+        env:
+          BUILD_ALL: ${{ inputs.build_all }}
+          BUILD_R619AC: ${{ inputs.build_r619ac }}
+          BUILD_X86: ${{ inputs.build_x86 }}
+          BUILD_X86_WITH_DOCKER: ${{ inputs.build_x86_with_docker }}
+          BUILD_X86_64: ${{ inputs.build_x86_64 }}
+          BUILD_X86_64_WITH_DOCKER: ${{ inputs.build_x86_64_with_docker }}
+        run: |
+          set -eu
+          targets='[]'
+
+          add_target() {
+            targets="$(jq -c --arg target "$1" '. + [$target]' <<< "$targets")"
+          }
+
+          if [ "$BUILD_ALL" = "true" ]; then
+            add_target 'r619ac'
+            add_target 'x86'
+            add_target 'x86-docker'
+            add_target 'x86_64'
+            add_target 'x86_64-docker'
+          else
+            [ "$BUILD_R619AC" = "true" ] && add_target 'r619ac'
+            [ "$BUILD_X86" = "true" ] && add_target 'x86'
+            [ "$BUILD_X86_WITH_DOCKER" = "true" ] && add_target 'x86-docker'
+            [ "$BUILD_X86_64" = "true" ] && add_target 'x86_64'
+            [ "$BUILD_X86_64_WITH_DOCKER" = "true" ] && add_target 'x86_64-docker'
+          fi
+
+          if [ "$targets" = '[]' ]; then
+            echo '错误：至少勾选一个编译项目，或勾选全选。' >&2
+            exit 1
+          fi
+
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "已选择编译项目：$targets"
+
   build:
+    needs: select_targets
     name: 编译 ${{ matrix.target }}
     runs-on: ubuntu-22.04
     timeout-minutes: 720
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(inputs.target == 'all' && '["r619ac","x86","x86_64"]' || format('["{0}"]', inputs.target)) }}
+        target: ${{ fromJSON(needs.select_targets.outputs.targets) }}
 
     steps:
       - name: 检出源码
@@ -207,7 +273,7 @@ jobs:
             target="${artifact_dir##*-23.05.7-}"
             case "$target" in
               r619ac) expected=4 ;;
-              x86|x86_64) expected=4 ;;
+              x86|x86-docker|x86_64|x86_64-docker) expected=4 ;;
               *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
             esac
             [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && [ -n "$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)" ] && expected=$((expected + 1))
@@ -219,8 +285,8 @@ jobs:
               name="$(basename "$file")"
               case "$target:$name" in
                 r619ac:*factory.ubi|r619ac:*sysupgrade.bin|r619ac:sha256sums|r619ac:*version.buildinfo) ;;
-                x86:*squashfs-combined.img.gz|x86:*squashfs-combined-efi.img.gz|x86:sha256sums|x86:*version.buildinfo) ;;
-                x86_64:*squashfs-combined.img.gz|x86_64:*squashfs-combined-efi.img.gz|x86_64:sha256sums|x86_64:*version.buildinfo) ;;
+                x86:*squashfs-combined.img.gz|x86:*squashfs-combined-efi.img.gz|x86:sha256sums|x86:*version.buildinfo|x86-docker:*squashfs-combined.img.gz|x86-docker:*squashfs-combined-efi.img.gz|x86-docker:sha256sums|x86-docker:*version.buildinfo) ;;
+                x86_64:*squashfs-combined.img.gz|x86_64:*squashfs-combined-efi.img.gz|x86_64:sha256sums|x86_64:*version.buildinfo|x86_64-docker:*squashfs-combined.img.gz|x86_64-docker:*squashfs-combined-efi.img.gz|x86_64-docker:sha256sums|x86_64-docker:*version.buildinfo) ;;
                 *:luci-app-connected-devices_*.ipk)
                   [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] || {
                     echo "未启用 IPK 编译却发现连接设备 IPK：$file" >&2

@@ -12,7 +12,7 @@ fail() {
 }
 
 case "$target" in
-	r619ac|x86|x86_64) ;;
+	r619ac|x86|x86-docker|x86_64|x86_64-docker) ;;
 	*) fail "未知固件目标 $target" ;;
 esac
 
@@ -47,7 +47,7 @@ case "$target" in
 		copy_one 'version.buildinfo' '*version.buildinfo'
 		expected=4
 		;;
-	x86|x86_64)
+	x86|x86-docker|x86_64|x86_64-docker)
 		copy_one 'squashfs-combined.img.gz' '*-squashfs-combined.img.gz'
 		copy_one 'squashfs-combined-efi.img.gz' '*-squashfs-combined-efi.img.gz'
 		copy_one 'sha256sums' 'sha256sums'

@@ -144,7 +144,8 @@ list_ciphers() {
 }
 
 supported_lzo() {
-	openvpn --help 2>/dev/null | grep -Eq -- '--(comp-lzo|compress)'
+	command -v openvpn >/dev/null 2>&1 || return 1
+	openvpn --version 2>/dev/null | grep -Fq '[LZO]'
 }
 
 dangerous_config() {

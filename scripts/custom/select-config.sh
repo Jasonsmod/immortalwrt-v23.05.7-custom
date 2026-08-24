@@ -9,9 +9,9 @@ build_date="${BUILD_DATE:-$(TZ="${TZ:-Asia/Shanghai}" date '+%Y-%m-%d')}"
 config_tmp="$TOPDIR/.config.custom.$$"
 
 case "$target" in
-	r619ac|x86|x86_64) ;;
+	r619ac|x86|x86-docker|x86_64|x86_64-docker) ;;
 	*)
-		printf '用法：%s {r619ac|x86|x86_64}\n' "$0" >&2
+		printf '用法：%s {r619ac|x86|x86-docker|x86_64|x86_64-docker}\n' "$0" >&2
 		exit 1
 		;;
 esac

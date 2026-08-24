@@ -97,6 +97,8 @@ require_text "$SERVER_MODEL" 'bind_interface = s:option(ListValue, "bind_interfa
 require_text "$SERVER_MODEL" 'remote = s:option(Value, "remote_host", "自定义 DDNS 地址")'
 require_text "$MANAGER" 'valid_remote_interface'
 require_text "$MANAGER" 'interface_address'
+require_text "$CONTROLLER" 'if profile:match("^错误：") then'
+require_text "$CONTROLLER" 'export-client " .. quoted .. " 2>&1'
 require_text "$MANAGER" 'remote $remote_host $port'
 require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option bind_interface 'wan'"
 require_text "$DEFAULTS" "main.bind_interface=wan"
@@ -119,7 +121,7 @@ require_text "$CONTROLLER" 'dispatcher.test_post_security()'
 require_text "$CONTROLLER" 'http.setfilehandler'
 require_text "$CONTROLLER" 'post("server_export")'
 require_text "$CLIENT_LIST_TEMPLATE" '添加'
-require_text "$CLIENT_LIST_TEMPLATE" '导入'
+require_text "$CLIENT_LIST_TEMPLATE" 'value="导入ovpn文件"'
 require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('enable')"
 require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('disable')"
 require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('delete')"
@@ -139,6 +141,7 @@ require_text "$CLIENT_MANAGER" 'openvpn.client_$id.config'
 require_text "$CLIENT_MANAGER" 'bind-dev'
 require_text "$CLIENT_MANAGER" 'BF-*'
 require_text "$CLIENT_MANAGER" "printf '%s\n' '0' > \"\$staging/lzo\""
+require_text "$CLIENT_MANAGER" "openvpn --version 2>/dev/null | grep -Fq '[LZO]'"
 require_text "$CLIENT_EDIT_TEMPLATE" '配置名称'
 require_text "$CLIENT_MANAGER" 'if [ -n "$mtu" ]; then'
 require_text "$CLIENT_MANAGER" 'mtu="$(uci -q get "$CONFIG.$id.tun_mtu" || true)"'
@@ -154,6 +157,13 @@ if grep -Fq 'manager_command("list-ciphers")' "$CONTROLLER"; then
 	fail_check '客户端编辑页面不应在加载时执行算法探测。'
 fi
 
+if sed -n '/^supported_lzo()/,/^}/p' "$CLIENT_MANAGER" | grep -Fq 'openvpn --help'; then
+	fail_check 'LZO编译能力不应通过OpenVPN精简帮助信息判断。'
+fi
+
+if grep -Fq 'jsonfilter -e "@.$field[0].address"' "$MANAGER"; then
+	fail_check '服务器线路 IP 解析仍使用未转义的连字符字段路径。'
+fi
 if grep -Fq '请先在服务器设置中填写公网地址或DDNS。' "$CONTROLLER"; then
 	fail_check '客户端导出不应强制要求填写自定义 DDNS。'
 fi
