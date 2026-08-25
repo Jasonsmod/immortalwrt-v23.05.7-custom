@@ -40,7 +40,7 @@ endif
 
 	$(INSTALL_DIR) $(1)/sbin
 	$(INSTALL_BIN) ./files/cpuinfo $(1)/sbin/
-ifneq ($(filter ipq% mediatek%, $(TARGETID)),)
+ifneq ($(filter ipq40xx%, $(TARGETID)),)
 	$(INSTALL_BIN) ./files/tempinfo $(1)/sbin/
 endif
 

@@ -101,10 +101,7 @@ return baseclass.extend({
 			data.error ? E('div', { 'class': 'alert-message warning' }, [
 				_('连接设备后端暂时不可用：%s').format(data.error)
 			]) : E([]),
-			table,
-			E('p', { 'class': 'cbi-section-descr' }, [
-				_('固定 DHCP 地址会直接列出；手动静态 IP 设备需要曾与路由器通信，才能从邻居表中识别。')
-			])
+			table
 		]);
 	}
 });
