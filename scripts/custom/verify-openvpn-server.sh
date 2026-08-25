@@ -8,6 +8,7 @@ PACKAGE_DIR="$TOPDIR/package/luci-app-openvpn-server-custom"
 DEFAULTS="$PACKAGE_DIR/files/etc/uci-defaults/90-openvpn-server-custom"
 MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-server-manager"
 AUTH_SCRIPT="$PACKAGE_DIR/files/usr/libexec/openvpn-server-auth"
+CLIENT_CHECK="$PACKAGE_DIR/files/usr/libexec/openvpn-server-client-check"
 CLIENT_MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-client-manager"
 CONTROLLER="$PACKAGE_DIR/files/usr/lib/lua/luci/controller/openvpn_server_custom.lua"
 SERVER_MODEL="$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua"
@@ -38,6 +39,7 @@ for file in \
 	"$DEFAULTS" \
 	"$MANAGER" \
 	"$AUTH_SCRIPT" \
+	"$CLIENT_CHECK" \
 	"$CLIENT_MANAGER" \
 	"$CONTROLLER" \
 	"$SERVER_MODEL" \
@@ -56,6 +58,7 @@ fi
 sh -n "$DEFAULTS" || fail_check 'OpenVPN网络初始化脚本语法无效。'
 sh -n "$MANAGER" || fail_check 'OpenVPN证书管理脚本语法无效。'
 sh -n "$AUTH_SCRIPT" || fail_check 'OpenVPN账号认证脚本语法无效。'
+sh -n "$CLIENT_CHECK" || fail_check 'OpenVPN证书用户校验脚本语法无效。'
 sh -n "$CLIENT_MANAGER" || fail_check 'OpenVPN客户端管理脚本语法无效。'
 
 require_text "$DEFAULTS" "set network.vpn0.device='tun0'"
@@ -97,12 +100,28 @@ require_text "$SERVER_MODEL" 'bind_interface = s:option(ListValue, "bind_interfa
 require_text "$SERVER_MODEL" 'remote = s:option(Value, "remote_host", "自定义 DDNS 地址")'
 require_text "$MANAGER" 'valid_remote_interface'
 require_text "$MANAGER" 'interface_address'
+require_text "$MANAGER" 'ensure_client_record'
+require_text "$MANAGER" 'enable-client) set_client_state 1 ;;'
+require_text "$MANAGER" 'delete-client) delete_client ;;'
+require_text "$MANAGER" '不能删除服务器证书'
+require_text "$MANAGER" 'client-connect %s'
+require_text "$CLIENT_CHECK" 'common_name'
+require_text "$CLIENT_CHECK" 'auth_mode="$(uci -q get openvpn_server.main.auth_mode'
+require_text "$CLIENT_CHECK" 'auth_mode='
+require_text "$CLIENT_CHECK" 'openvpn_server.$section.enabled'
+require_text "$CONTROLLER" 'post("server_client_add")'
+require_text "$CONTROLLER" 'post("server_client_download")'
+require_text "$CONTROLLER" 'post("server_client_action")'
+require_text "$CONTROLLER" 'name ~= "server"'
+require_text "$ACTIONS_TEMPLATE" '新增用户'
+require_text "$ACTIONS_TEMPLATE" '下载 OVPN'
+require_text "$ACTIONS_TEMPLATE" '删除'
+require_text "$MANAGER" "create_client 'default'"
+require_text "$PACKAGE_DIR/Makefile" 'openvpn-server-client-check'
 require_text "$CONTROLLER" 'if profile:match("^错误：") then'
-require_text "$CONTROLLER" 'export-client " .. quoted .. " 2>&1'
 require_text "$MANAGER" 'remote $remote_host $port'
 require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option bind_interface 'wan'"
 require_text "$DEFAULTS" "main.bind_interface=wan"
-require_text "$ACTIONS_TEMPLATE" '导出 Windows 客户端配置'
 require_text "$ACTIONS_TEMPLATE" 'if not self.pki_ready then'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-server-manager'
 require_text "$PACKAGE_DIR/Makefile" 'chmod 0700 $(1)/usr/libexec/openvpn-client-manager'
@@ -119,7 +138,7 @@ require_text "$CONTROLLER" 'post("client_action")'
 require_text "$CONTROLLER" 'CLIENT_CIPHERS'
 require_text "$CONTROLLER" 'dispatcher.test_post_security()'
 require_text "$CONTROLLER" 'http.setfilehandler'
-require_text "$CONTROLLER" 'post("server_export")'
+
 require_text "$CLIENT_LIST_TEMPLATE" '添加'
 require_text "$CLIENT_LIST_TEMPLATE" 'value="导入ovpn文件"'
 require_text "$CLIENT_LIST_TEMPLATE" "submitClientAction('enable')"
@@ -163,6 +182,9 @@ fi
 
 if grep -Fq 'jsonfilter -e "@.$field[0].address"' "$MANAGER"; then
 	fail_check '服务器线路 IP 解析仍使用未转义的连字符字段路径。'
+fi
+if grep -Eq 'server-export|server_export|导出 Windows 客户端配置' "$CONTROLLER" "$ACTIONS_TEMPLATE"; then
+	fail_check '旧的 Windows 客户端配置导出入口仍存在。'
 fi
 if grep -Fq '请先在服务器设置中填写公网地址或DDNS。' "$CONTROLLER"; then
 	fail_check '客户端导出不应强制要求填写自定义 DDNS。'

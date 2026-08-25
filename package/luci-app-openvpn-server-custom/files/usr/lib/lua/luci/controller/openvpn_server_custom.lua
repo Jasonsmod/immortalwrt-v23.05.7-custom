@@ -25,12 +25,14 @@ function index()
 
 	entry({"admin", "vpn", "openvpn-server-custom"}, firstchild(), _("OpenVPN 服务器"), 65).dependent = true
 	entry({"admin", "vpn", "openvpn-server-custom", "settings"}, cbi("openvpn-server-custom/server"), _("服务器设置"), 10).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "server-client-add"}, post("server_client_add")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "server-client-download"}, post("server_client_download")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "server-client-action"}, post("server_client_action")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "clients"}, call("client_list"), _("客户端配置"), 20).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-edit"}, call("client_edit")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-save"}, post("client_save")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-action"}, post("client_action")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-import"}, call("client_import")).leaf = true
-	entry({"admin", "vpn", "openvpn-server-custom", "server-export"}, post("server_export")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "account-save"}, post("account_save")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "account-delete"}, post("account_delete")).leaf = true
 end
@@ -377,6 +379,87 @@ local function redirect_server_settings(message)
     http.redirect(url)
 end
 
+local function valid_server_client_name(name)
+    return type(name) == "string" and name ~= "server" and name:match("^[A-Za-z0-9_-]+$") ~= nil and #name <= 32
+end
+
+function server_client_add()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local fs = require "nixio.fs"
+    local util = require "luci.util"
+    local name = http.formvalue("server_client_name") or ""
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if not valid_server_client_name(name) then
+        redirect_server_settings("错误：客户端用户名只能包含字母、数字、下划线和连字符，最长32个字符。")
+        return
+    end
+    if not fs.access("/etc/easy-rsa/pki/ca.crt") then
+        redirect_server_settings("错误：请先初始化CA和服务器证书。")
+        return
+    end
+    local result = sys.exec(SERVER_MANAGER .. " create-client " .. util.shellquote(name) .. " 2>&1"):gsub("%s+$", "")
+    redirect_server_settings(result)
+end
+
+function server_client_download()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local util = require "luci.util"
+    local name = http.formvalue("server_client_name") or ""
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if not valid_server_client_name(name) then
+        http.status(400, "Bad Request")
+        http.prepare_content("text/plain; charset=utf-8")
+        http.write("客户端用户名格式无效。\n")
+        return
+    end
+    local profile = sys.exec(SERVER_MANAGER .. " export-client " .. util.shellquote(name) .. " 2>&1")
+    if not profile:match("^client\n") then
+        http.status(409, "Conflict")
+        http.prepare_content("text/plain; charset=utf-8")
+        if profile:match("^错误：") then
+            http.write(profile)
+        else
+            http.write("无法生成客户端配置。\n")
+        end
+        return
+    end
+    http.header("Cache-Control", "no-store")
+    http.header("Pragma", "no-cache")
+    http.header("Content-Disposition", string.format('attachment; filename="%s.ovpn"', name))
+    http.prepare_content("application/x-openvpn-profile")
+    http.write(profile)
+end
+
+function server_client_action()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local util = require "luci.util"
+    local name = http.formvalue("server_client_name") or ""
+    local action = http.formvalue("server_client_action") or ""
+    local commands = {
+        enable = "enable-client",
+        disable = "disable-client",
+        delete = "delete-client"
+    }
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if not valid_server_client_name(name) or not commands[action] then
+        redirect_server_settings("错误：客户端用户操作无效。")
+        return
+    end
+    local result = sys.exec(SERVER_MANAGER .. " " .. commands[action] .. " " .. util.shellquote(name) .. " 2>&1"):gsub("%s+$", "")
+    redirect_server_settings(result)
+end
 function account_save()
     local dispatcher = require "luci.dispatcher"
     local http = require "luci.http"
@@ -424,55 +507,4 @@ function account_delete()
     end
     local result = sys.exec(SERVER_MANAGER .. " delete-account " .. util.shellquote(username) .. " 2>&1"):gsub("%s+$", "")
     redirect_server_settings(result)
-end
-
-function server_export()
-	local http = require "luci.http"
-	local fs = require "nixio.fs"
-	local sys = require "luci.sys"
-	local util = require "luci.util"
-	local name = http.formvalue("server_client_name") or ""
-	local auth_mode = sys.exec("uci -q get openvpn_server.main.auth_mode 2>/dev/null"):gsub("%s+$", "")
-	local needs_certificate = auth_mode ~= "account"
-
-	if #name == 0 or #name > 32 or not name:match("^[A-Za-z0-9_-]+$") then
-		http.status(400, "Bad Request")
-		http.prepare_content("text/plain; charset=utf-8")
-		http.write("客户端名称只能包含字母、数字、下划线和连字符，最长32个字符。\n")
-		return
-	end
-	if not fs.access("/etc/easy-rsa/pki/ca.crt") then
-		http.status(409, "Conflict")
-		http.prepare_content("text/plain; charset=utf-8")
-		http.write("请先初始化CA和服务器证书。\n")
-		return
-	end
-	local quoted = util.shellquote(name)
-	if needs_certificate and not fs.access("/etc/easy-rsa/pki/issued/" .. name .. ".crt") then
-		local result = sys.exec(SERVER_MANAGER .. " create-client " .. quoted .. " 2>&1")
-		if result:match("^错误：") then
-			http.status(409, "Conflict")
-			http.prepare_content("text/plain; charset=utf-8")
-			http.write(result)
-			return
-		end
-	end
-
-	local profile = sys.exec(SERVER_MANAGER .. " export-client " .. quoted .. " 2>&1")
-	if not profile:match("^client\n") then
-		http.status(409, "Conflict")
-		http.prepare_content("text/plain; charset=utf-8")
-		if profile:match("^错误：") then
-			http.write(profile)
-		else
-			http.write("无法生成客户端配置，证书可能已吊销或配置尚未完善。\n")
-		end
-		return
-	end
-
-	http.header("Cache-Control", "no-store")
-	http.header("Pragma", "no-cache")
-	http.header("Content-Disposition", string.format('attachment; filename="%s.ovpn"', name))
-	http.prepare_content("application/x-openvpn-profile")
-	http.write(profile)
 end

@@ -40,9 +40,11 @@ define Package/luci-app-openvpn-server-custom/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) ./files/usr/libexec/openvpn-server-manager $(1)/usr/libexec/openvpn-server-manager
 	$(INSTALL_BIN) ./files/usr/libexec/openvpn-server-auth $(1)/usr/libexec/openvpn-server-auth
+	$(INSTALL_BIN) ./files/usr/libexec/openvpn-server-client-check $(1)/usr/libexec/openvpn-server-client-check
 	$(INSTALL_BIN) ./files/usr/libexec/openvpn-client-manager $(1)/usr/libexec/openvpn-client-manager
 	chmod 0700 $(1)/usr/libexec/openvpn-server-manager
 	chmod 0755 $(1)/usr/libexec/openvpn-server-auth
+	chmod 0755 $(1)/usr/libexec/openvpn-server-client-check
 	chmod 0700 $(1)/usr/libexec/openvpn-client-manager
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
 	$(INSTALL_DATA) ./files/lib/upgrade/keep.d/openvpn-server-custom $(1)/lib/upgrade/keep.d/openvpn-server-custom

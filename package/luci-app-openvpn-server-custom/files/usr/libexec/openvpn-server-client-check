@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -eu
+
+name="${common_name-}"
+[ -n "$name" ] || exit 0
+case "$name" in
+    *[!A-Za-z0-9_-]*) exit 1 ;;
+esac
+
+auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
+[ "$auth_mode" = 'account' ] && exit 0
+
+for section in $(uci -q show openvpn_server 2>/dev/null |
+    sed -n 's/^openvpn_server\.\([^.=]*\)=client$/\1/p'); do
+    configured="$(uci -q get "openvpn_server.$section.name" || true)"
+    [ "$configured" = "$name" ] || continue
+    enabled="$(uci -q get "openvpn_server.$section.enabled" || printf '1')"
+    [ "$enabled" = '1' ] && exit 0
+    exit 1
+done
+
+exit 0

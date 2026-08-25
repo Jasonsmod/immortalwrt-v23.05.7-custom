@@ -19,6 +19,7 @@ umask 077
 OPENVPN_CONFIG="$OPENVPN_DIR/custom_server.conf"
 ACCOUNT_DB='/etc/openvpn/server-accounts'
 AUTH_SCRIPT='/usr/libexec/openvpn-server-auth'
+CLIENT_CHECK_SCRIPT='/usr/libexec/openvpn-server-client-check'
 
 fail() {
 	printf '错误：%s\n' "$*" >&2
@@ -317,6 +318,75 @@ valid_client_certificate() {
 	' "$PKI_DIR/index.txt"
 }
 
+find_client_section() {
+    local wanted="$1" section name
+    CLIENT_SECTION=''
+    for section in $(uci -q show openvpn_server 2>/dev/null |
+        sed -n 's/^openvpn_server\.\([^.=]*\)=client$/\1/p'); do
+        name="$(uci -q get "openvpn_server.$section.name" || true)"
+        if [ "$name" = "$wanted" ]; then
+            CLIENT_SECTION="$section"
+            return 0
+        fi
+    done
+    return 1
+}
+
+client_enabled() {
+    local name="$1" state
+    if ! find_client_section "$name"; then
+        printf '1\n'
+        return 0
+    fi
+    state="$(uci -q get "openvpn_server.$CLIENT_SECTION.enabled" || printf '1')"
+    [ "$state" = '0' ] && printf '0\n' || printf '1\n'
+}
+
+ensure_client_record() {
+    local name="$1"
+    valid_client_name "$name" || return 1
+    if ! find_client_section "$name"; then
+        CLIENT_SECTION="$(uci -q add openvpn_server client)"
+        uci -q set "openvpn_server.$CLIENT_SECTION.name=$name"
+        uci -q set "openvpn_server.$CLIENT_SECTION.enabled=1"
+    else
+        uci -q get "openvpn_server.$CLIENT_SECTION.enabled" >/dev/null 2>&1 ||
+            uci -q set "openvpn_server.$CLIENT_SECTION.enabled=1"
+    fi
+    uci -q commit openvpn_server
+}
+
+set_client_state() {
+    local name="$CLIENT_NAME" state="$1"
+    valid_client_name "$name" || fail '客户端用户名格式无效。'
+    case "$state" in
+        0|1) ;;
+        *) fail '客户端状态无效。' ;;
+    esac
+    valid_client_certificate "$name" || fail '客户端证书不存在或已经吊销。'
+    ensure_client_record "$name"
+    uci -q set "openvpn_server.$CLIENT_SECTION.enabled=$state"
+    uci -q commit openvpn_server
+    /etc/init.d/openvpn reload >/dev/null 2>&1 || true
+    [ "$state" = '1' ] && printf '客户端用户 %s 已启用。\n' "$name" ||
+        printf '客户端用户 %s 已停用。\n' "$name"
+}
+
+delete_client() {
+    local name="$CLIENT_NAME"
+    valid_client_name "$name" || fail '客户端用户名格式无效。'
+    [ "$name" != 'server' ] || fail '不能删除服务器证书。'
+    valid_client_certificate "$name" || fail '客户端证书不存在或已经吊销。'
+    easyrsa revoke "$name"
+    easyrsa gen-crl
+    chmod 0644 "$PKI_DIR/crl.pem"
+    if find_client_section "$name"; then
+        uci -q delete "openvpn_server.$CLIENT_SECTION"
+        uci -q commit openvpn_server
+    fi
+    /etc/init.d/openvpn reload >/dev/null 2>&1 || true
+    printf '客户端用户 %s 已删除，证书已吊销且不可恢复。\n' "$name"
+}
 reload_services() {
 	/etc/init.d/network reload >/dev/null 2>&1 || true
 	/etc/init.d/firewall reload >/dev/null 2>&1 || true
@@ -354,6 +424,8 @@ render_server_config() {
         printf 'group nogroup\n'
         printf 'status /var/run/openvpn-server.status\n'
         printf 'verb 3\n'
+        printf 'client-connect %s\n' "$CLIENT_CHECK_SCRIPT"
+        printf 'script-security 2\n'
         [ -z "$data_cipher" ] || {
             printf 'data-ciphers %s\n' "$data_cipher"
             printf 'data-ciphers-fallback %s\n' "$data_cipher"
@@ -578,6 +650,7 @@ initialize_pki() {
 	EASYRSA_REQ_CN='ImmortalWrt OpenVPN CA' easyrsa build-ca nopass
 	easyrsa build-server-full server nopass
 	easyrsa gen-crl
+	create_client 'default'
 
 	chmod 0700 "$PKI_DIR" "$PKI_DIR/private" "$OPENVPN_DIR"
 	chmod 0600 "$PKI_DIR/private/ca.key" "$PKI_DIR/private/server.key"
@@ -593,6 +666,7 @@ create_client() {
 
 	easyrsa build-client-full "$CLIENT_NAME" nopass
 	chmod 0600 "$PKI_DIR/private/$CLIENT_NAME.key"
+	ensure_client_record "$CLIENT_NAME"
 	printf '客户端证书 %s 已生成。\n' "$CLIENT_NAME"
 }
 
@@ -609,14 +683,21 @@ revoke_client() {
 }
 
 list_clients() {
-	[ -s "$PKI_DIR/index.txt" ] || exit 0
-	awk -F '\t' '
-		$1 == "V" && $6 !~ /\/CN=server$/ {
-			name = $6
-			sub(/^.*\/CN=/, "", name)
-			print name
-		}
-	' "$PKI_DIR/index.txt"
+    local name state
+    [ -s "$PKI_DIR/index.txt" ] || exit 0
+    while IFS= read -r name || [ -n "$name" ]; do
+        [ -n "$name" ] || continue
+        state="$(client_enabled "$name")"
+        printf '%s|%s\n' "$name" "$state"
+    done <<EOF_CLIENTS
+$(awk -F '\t' '
+    $1 == "V" && $6 !~ /\/CN=server$/ {
+        name = $6
+        sub(/^.*\/CN=/, "", name)
+        print name
+    }
+' "$PKI_DIR/index.txt")
+EOF_CLIENTS
 }
 
 export_client() {
@@ -689,8 +770,11 @@ case "$ACTION" in
 	create-client) create_client ;;
 	revoke-client) revoke_client ;;
 	list-clients) list_clients ;;
+	enable-client) set_client_state 1 ;;
+	disable-client) set_client_state 0 ;;
+	delete-client) delete_client ;;
 	export-client) export_client ;;
 	list-ciphers) list_data_ciphers ;;
 	recommended-cipher) recommended_data_cipher ;;
-	*) fail '用法：openvpn-server-manager {apply|save-account|delete-account|init-pki|create-client|revoke-client|list-clients|export-client|list-ciphers|recommended-cipher} [参数]' ;;
+	*) fail '用法：openvpn-server-manager {apply|save-account|delete-account|init-pki|create-client|revoke-client|list-clients|enable-client|disable-client|delete-client|export-client|list-ciphers|recommended-cipher} [参数]' ;;
 esac

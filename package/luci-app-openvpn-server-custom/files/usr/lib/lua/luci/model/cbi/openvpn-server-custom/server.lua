@@ -46,6 +46,22 @@ local function interface_address(interface)
     return type(address) == "table" and address.address or ""
 end
 
+local function load_client_users()
+    local users = {}
+    local client_output = sys.exec(manager .. " list-clients 2>/dev/null") or ""
+    for line in client_output:gmatch("[^\r\n]+") do
+        local name, enabled = line:match("^([A-Za-z0-9_-]+)|([01])$")
+        if name then
+            users[#users + 1] = {
+                name = name,
+                enabled = enabled == "1"
+            }
+        end
+    end
+    return users
+end
+
+local client_users = pki_ready and load_client_users() or {}
 m = Map("openvpn_server", "OpenVPN 服务器",
 	"独立管理 OpenVPN 服务器和证书。服务器只有在 PKI 初始化完成后才会启动。")
 m.description = string.format("当前状态：%s；证书状态：%s。",
@@ -59,12 +75,16 @@ actions = s:option(Button, "_init_pki", "")
 actions.template = "openvpn-server-custom/server-actions"
 actions.pki_ready = pki_ready
 actions.inputtitle = "初始化 CA 和服务器证书"
+actions.client_users = client_users
 function actions.write()
 	if not pki_ready then
 		m.message = sys.exec(manager .. " init-pki 2>&1")
+		actions.pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
+			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
+			fs.access("/etc/easy-rsa/pki/private/server.key")
+		actions.client_users = actions.pki_ready and load_client_users() or {}
 	end
 end
-
 enabled = s:option(Flag, "enabled", "启用 OpenVPN 服务")
 enabled.rmempty = false
 
