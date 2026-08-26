@@ -204,10 +204,14 @@ actions.remote_host_error = http.formvalue("remote_host_error") == "1"
 function actions.write()
 	if not pki_ready then
 		m.message = sys.exec(manager .. " init-pki 2>&1")
-		actions.pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
+		pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
 			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
 			fs.access("/etc/easy-rsa/pki/private/server.key")
+		actions.pki_ready = pki_ready
 		actions.client_users = actions.pki_ready and load_client_users() or {}
+		m.description = string.format("当前状态：%s；证书状态：%s。",
+			running and "运行中" or "未运行",
+			pki_ready and "已初始化" or "未初始化")
 	end
 end
 
