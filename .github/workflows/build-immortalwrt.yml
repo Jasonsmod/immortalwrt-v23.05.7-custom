@@ -48,6 +48,11 @@ on:
         required: false
         default: false
         type: boolean
+      build_terminal_limit_ipk:
+        description: 编译终端限速 LuCI IPK
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -65,6 +70,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
+      build_firmware: ${{ steps.targets.outputs.build_firmware }}
     steps:
       - name: 生成编译项目矩阵
         id: targets
@@ -75,26 +81,33 @@ jobs:
           BUILD_X86_WITH_DOCKER: ${{ inputs.build_x86_with_docker }}
           BUILD_X86_64: ${{ inputs.build_x86_64 }}
           BUILD_X86_64_WITH_DOCKER: ${{ inputs.build_x86_64_with_docker }}
+          BUILD_TERMINAL_LIMIT_IPK: ${{ inputs.build_terminal_limit_ipk }}
         run: |
           set -eu
           targets='[]'
+          firmware='false'
 
           add_target() {
             targets="$(jq -c --arg target "$1" '. + [$target]' <<< "$targets")"
           }
 
-          [ "$BUILD_R619AC" = "true" ] && add_target 'r619ac'
-          [ "$BUILD_X86" = "true" ] && add_target 'x86'
-          [ "$BUILD_X86_WITH_DOCKER" = "true" ] && add_target 'x86-docker'
-          [ "$BUILD_X86_64" = "true" ] && add_target 'x86_64'
-          [ "$BUILD_X86_64_WITH_DOCKER" = "true" ] && add_target 'x86_64-docker'
+          [ "$BUILD_R619AC" = "true" ] && { add_target 'r619ac'; firmware='true'; }
+          [ "$BUILD_X86" = "true" ] && { add_target 'x86'; firmware='true'; }
+          [ "$BUILD_X86_WITH_DOCKER" = "true" ] && { add_target 'x86-docker'; firmware='true'; }
+          [ "$BUILD_X86_64" = "true" ] && { add_target 'x86_64'; firmware='true'; }
+          [ "$BUILD_X86_64_WITH_DOCKER" = "true" ] && { add_target 'x86_64-docker'; firmware='true'; }
 
           if [ "$targets" = '[]' ] && [ "$BUILD_ALL" = "true" ]; then
+            firmware='true'
             add_target 'r619ac'
             add_target 'x86'
             add_target 'x86-docker'
             add_target 'x86_64'
             add_target 'x86_64-docker'
+          fi
+
+          if [ "$targets" = '[]' ] && [ "$BUILD_TERMINAL_LIMIT_IPK" = "true" ]; then
+            add_target 'x86_64'
           fi
 
           if [ "$targets" = '[]' ]; then
@@ -103,6 +116,7 @@ jobs:
           fi
 
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "build_firmware=$firmware" >> "$GITHUB_OUTPUT"
           echo "已选择编译项目：$targets"
 
   build:
@@ -184,14 +198,16 @@ jobs:
           limit-access-to-actor: true
 
       - name: 下载软件包源码
+        if: ${{ needs.select_targets.outputs.build_firmware == 'true' || inputs.build_terminal_limit_ipk }}
         run: make download -j8
 
       - name: 编译固件
+        if: ${{ needs.select_targets.outputs.build_firmware == 'true' }}
         run: |
           make -j"$(nproc)" || make -j1 V=s
 
       - name: 验证 R619AC 刷机镜像
-        if: ${{ matrix.target == 'r619ac' }}
+        if: ${{ needs.select_targets.outputs.build_firmware == 'true' && matrix.target == 'r619ac' }}
         run: bash scripts/custom/verify-r619ac-images.sh
 
       - name: 编译连接设备 IPK
@@ -209,8 +225,15 @@ jobs:
             echo "::warning::OpenVPN 服务器自定义 LuCI IPK 编译失败，继续主固件编译和导出。"
           fi
 
-      - name: 收集发布固件
+      - name: 编译终端限速 IPK
+        if: ${{ success() && inputs.build_terminal_limit_ipk }}
+        run: make package/luci-app-terminal-limit/compile CONFIG_PACKAGE_luci-app-terminal-limit=m -j"$(nproc)" V=s
+
+      - name: 准备构建产物目录
         if: ${{ success() }}
+        run: mkdir -p "artifacts/${{ matrix.target }}"
+      - name: 收集发布固件
+        if: ${{ success() && needs.select_targets.outputs.build_firmware == 'true' }}
         run: bash scripts/custom/collect-release-files.sh "${{ matrix.target }}" bin/targets "artifacts/${{ matrix.target }}"
 
       - name: 将连接设备 IPK 放入固件目录
@@ -240,6 +263,16 @@ jobs:
             echo "::warning::找到 $ipk_count 个 OpenVPN 服务器自定义 IPK，跳过复制并继续导出主固件。"
           fi
 
+      - name: 将终端限速 IPK 放入构建目录
+        if: ${{ success() && inputs.build_terminal_limit_ipk }}
+        run: |
+          ipk_count="$(find bin/packages -type f -name 'luci-app-terminal-limit_*.ipk' | wc -l | tr -d '[:space:]')"
+          if [ "$ipk_count" -ne 1 ]; then
+            echo "终端限速 IPK 数量错误：应为 1，实际为 $ipk_count" >&2
+            exit 1
+          fi
+          cp "$(find bin/packages -type f -name 'luci-app-terminal-limit_*.ipk' -print -quit)" "artifacts/${{ matrix.target }}/"
+
       - name: 上传构建产物
         if: ${{ success() && hashFiles('artifacts/**') != '' }}
         uses: actions/upload-artifact@v6
@@ -251,7 +284,7 @@ jobs:
 
   release:
     name: 发布固件
-    needs: build
+    needs: [select_targets, build]
     if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-22.04
     permissions:
@@ -266,16 +299,27 @@ jobs:
         env:
           BUILD_CONNECTED_DEVICES_IPK: ${{ inputs.build_connected_devices_ipk }}
           BUILD_OPENVPN_SERVER_CUSTOM_IPK: ${{ inputs.build_openvpn_server_custom_ipk }}
+          BUILD_TERMINAL_LIMIT_IPK: ${{ inputs.build_terminal_limit_ipk }}
+          BUILD_FIRMWARE: ${{ needs.select_targets.outputs.build_firmware }}
         run: |
           mkdir -p release-assets
           for artifact_dir in artifacts/immortalwrt-23.05.7-*; do
             [ -d "$artifact_dir" ] || continue
             target="${artifact_dir##*-23.05.7-}"
-            case "$target" in
-              r619ac) expected=4 ;;
-              x86|x86-docker|x86_64|x86_64-docker) expected=4 ;;
-              *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
-            esac
+            if [ "$BUILD_FIRMWARE" = "true" ]; then
+              case "$target" in
+                r619ac) expected=4 ;;
+                x86|x86-docker|x86_64|x86_64-docker) expected=4 ;;
+                *) echo "未知 Artifact 目标：$target" >&2; exit 1 ;;
+              esac
+            else
+              expected=0
+            fi
+            if [ "$BUILD_TERMINAL_LIMIT_IPK" = "true" ]; then
+              terminal_limit_ipk_count="$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-terminal-limit_*.ipk' | wc -l | tr -d '[:space:]')"
+              [ "$terminal_limit_ipk_count" -eq 1 ] || { echo "终端限速 IPK 数量错误：$target 应为 1，实际为 $terminal_limit_ipk_count" >&2; exit 1; }
+              expected=$((expected + 1))
+            fi
             [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] && [ -n "$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-connected-devices_*.ipk' -print -quit)" ] && expected=$((expected + 1))
             openvpn_ipk_count="$(find "$artifact_dir" -maxdepth 1 -type f -name 'luci-app-openvpn-server-custom_*.ipk' | wc -l | tr -d '[:space:]')"
             expected=$((expected + openvpn_ipk_count))
@@ -290,6 +334,12 @@ jobs:
                 *:luci-app-connected-devices_*.ipk)
                   [ "$BUILD_CONNECTED_DEVICES_IPK" = "true" ] || {
                     echo "未启用 IPK 编译却发现连接设备 IPK：$file" >&2
+                    exit 1
+                  }
+                  ;;
+                *:luci-app-terminal-limit_*.ipk)
+                  [ "$BUILD_TERMINAL_LIMIT_IPK" = "true" ] || {
+                    echo "未启用终端限速 IPK 编译却发现插件 IPK：$file" >&2
                     exit 1
                   }
                   ;;

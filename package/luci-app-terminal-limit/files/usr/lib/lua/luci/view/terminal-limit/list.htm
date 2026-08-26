@@ -1,0 +1,95 @@
+<%+header%>
+<%
+local http = require "luci.http"
+local function selected(value, current)
+	return value == current and ' selected="selected"' or ""
+end
+local function checked(value)
+	return value and ' checked="checked"' or ""
+end
+local is_ip = kind == "ip"
+local title = is_ip and "IP限速" or "MAC限速"
+local edit_url = urls.edit .. "?kind=" .. kind
+%>
+<div class="cbi-map">
+	<h2 name="content"><%=title%></h2>
+	<div class="cbi-map-descr">按终端配置独立或共享上下行速率，时间段按路由器本地时间执行。</div>
+	<% if message and #message > 0 then %>
+	<div class="alert-message <%=message:match("错误") and "warning" or "notice"%>"><%=pcdata(message)%></div>
+	<% end %>
+
+	<form method="post" action="<%=pcdata(urls.global)%>" class="cbi-section">
+		<input type="hidden" name="token" value="<%=token%>" />
+		<input type="hidden" name="kind" value="<%=pcdata(kind)%>" />
+		<div class="cbi-value">
+			<label class="cbi-value-title" for="terminal-enabled">启用终端限速</label>
+			<div class="cbi-value-field"><input id="terminal-enabled" type="checkbox" name="enabled" value="1"<%=checked(global.enabled == "1")%> />
+				<select name="qdisc" style="margin-left:12px">
+					<option value="cake"<%=selected("cake", global.qdisc)%>>CAKE（推荐）</option>
+					<option value="fq_codel"<%=selected("fq_codel", global.qdisc)%>>fq_codel</option>
+				</select>
+				<input class="btn cbi-button cbi-button-apply" type="submit" value="保存全局设置" />
+			</div>
+		</div>
+	</form>
+
+	<div class="cbi-page-actions" style="text-align:left">
+		<a class="btn cbi-button cbi-button-add" href="<%=pcdata(edit_url)%>">添加</a>
+		<form method="post" action="<%=pcdata(urls.action)%>" style="display:inline">
+			<input type="hidden" name="token" value="<%=token%>" />
+			<input type="hidden" name="kind" value="<%=pcdata(kind)%>" />
+			<input type="hidden" name="action" id="terminal-action" value="" />
+			<input class="btn cbi-button cbi-button-apply" type="button" value="启用" onclick="submitTerminalAction('enable')" />
+			<input class="btn cbi-button cbi-button-reset" type="button" value="停用" onclick="submitTerminalAction('disable')" />
+			<input class="btn cbi-button cbi-button-remove" type="button" value="删除" onclick="submitTerminalAction('delete')" />
+			<table class="table" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:12px">
+				<thead>
+					<tr>
+						<th><%=is_ip and "线路" or "协议栈"%></th>
+						<% if is_ip then %><th>内网IP</th><th>协议</th><th>源端口</th><th>目的端口</th><% else %><th>线路</th><th>MAC</th><% end %>
+						<th>限速模式</th><th>上行(KB/s)</th><th>下行(KB/s)</th><th>周期</th><th>时间段</th><th>备注</th><th>状态</th><th>操作</th><th><input type="checkbox" onclick="toggleTerminalAll(this.checked)" /></th>
+					</tr>
+				</thead>
+				<tbody>
+				<% if #rules == 0 then %>
+				<tr><td colspan="<%=is_ip and 14 or 12%>" style="text-align:center">暂无数据</td></tr>
+				<% else %>
+				<% for _, rule in ipairs(rules) do %>
+				<tr>
+					<td><%=pcdata(is_ip and rule.interface or rule.family == "6" and "IPv6" or "IPv4")%></td>
+					<% if is_ip then %>
+					<td><%=pcdata(rule.targets)%></td><td><%=pcdata(rule.protocol)%></td><td><%=pcdata(rule.src_ports or "")%></td><td><%=pcdata(rule.dst_ports or "")%></td>
+					<% else %><td><%=pcdata(rule.interface)%></td><td><%=pcdata(rule.targets)%></td><% end %>
+					<td><%=rule.mode == "shared" and "共享限速" or "独立限速"%></td>
+					<td><%=pcdata(rule.upload_kbyte)%></td><td><%=pcdata(rule.download_kbyte)%></td><td><%=pcdata(rule.weekdays)%></td><td><%=pcdata(rule.time)%></td><td><%=pcdata(rule.comment)%></td>
+					<td><%=rule.enabled and "启用" or "停用"%></td>
+					<td><a href="<%=pcdata(edit_url .. "&id=" .. http.urlencode(rule.id))%>">编辑</a>
+						<a href="javascript:void(0)" onclick="submitTerminalOne('<%=pcdata(rule.id)%>', '<%=rule.enabled and "disable" or "enable"%>')"><%=rule.enabled and "停用" or "启用"%></a>
+						<a href="javascript:void(0)" onclick="submitTerminalOne('<%=pcdata(rule.id)%>', 'delete')">删除</a></td>
+					<td><input class="terminal-select" type="checkbox" name="selected.<%=pcdata(rule.id)%>" value="1" /></td>
+				</tr>
+				<% end %>
+				<% end %>
+				</tbody>
+			</table>
+		</form>
+	</div>
+	<div class="cbi-map-descr">共 <%=#rules%> 条规则；运行状态：<%=status.enabled == "1" and "已启用" or "已停用"%>，当前活动目标：<%=pcdata(status.active or "0")%>，队列：<%=pcdata(status.qdisc or global.qdisc)%></div>
+</div>
+<script type="text/javascript">
+function terminalBoxes() { return document.querySelectorAll('.terminal-select'); }
+function toggleTerminalAll(checked) { var boxes = terminalBoxes(); for (var i = 0; i < boxes.length; i++) boxes[i].checked = checked; }
+function terminalSelected() { return document.querySelectorAll('.terminal-select:checked').length; }
+function submitTerminalOne(id, action) {
+	var box = document.querySelector('input[name="selected.' + id + '"]');
+	if (box) box.checked = true;
+	submitTerminalAction(action);
+}
+function submitTerminalAction(action) {
+	if (!terminalSelected()) { alert('请至少选择一条规则。'); return; }
+	if (action === 'delete' && !confirm('确定删除所选规则？')) return;
+	document.getElementById('terminal-action').value = action;
+	document.getElementById('terminal-action').form.submit();
+}
+</script>
+<%+footer%>

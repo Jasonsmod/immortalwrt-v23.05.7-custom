@@ -1,0 +1,12 @@
+#!/bin/sh
+
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+uci -q get terminal_limit.main >/dev/null 2>&1 || {
+	uci -q set terminal_limit.main=global
+	uci -q set terminal_limit.main.enabled=0
+	uci -q set terminal_limit.main.qdisc=cake
+	uci -q commit terminal_limit
+}
+
+exit 0

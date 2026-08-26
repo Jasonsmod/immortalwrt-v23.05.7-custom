@@ -1,0 +1,457 @@
+#!/bin/sh
+
+set -eu
+
+CONFIG=terminal_limit
+STATE_DIR=/var/run/terminal-limit
+LOCK_DIR=/var/lock/terminal-limit
+PARENT_RATE=100000000
+MARK_BASE=1000
+MANAGER_NAME=terminal_limit
+
+mkdir -p "$STATE_DIR"
+
+uci_get() {
+	uci -q get "$CONFIG.$1.$2" 2>/dev/null || true
+}
+
+sections() {
+	uci -q show "$CONFIG" 2>/dev/null | sed -n "s/^$CONFIG\.\([^.=]*\)=$1$/\1/p"
+}
+
+valid_bool() {
+	[ "$1" = 0 ] || [ "$1" = 1 ]
+}
+
+valid_uint() {
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+valid_rate() {
+	valid_uint "$1" && [ "$1" -le 12500000 ]
+}
+
+valid_time() {
+	case "$1" in
+		[0-2][0-9]:[0-5][0-9])
+			h=${1%:*}
+			[ "$h" -le 23 ]
+			;;
+		*) return 1 ;;
+	esac
+}
+
+time_to_min() {
+	h=${1%:*}
+	m=${1#*:}
+	h=${h#0}
+	m=${m#0}
+	[ -n "$h" ] || h=0
+	[ -n "$m" ] || m=0
+	echo $((h * 60 + m))
+}
+
+rule_active() {
+	section="$1"
+	[ "$(uci_get "$section" enabled)" = 1 ] || return 1
+	day="$(date +%u)"
+	days=" $(uci_get "$section" weekdays) "
+	echo "$days" | grep -Fq " $day " || return 1
+	start="$(uci_get "$section" time_start)"
+	end="$(uci_get "$section" time_end)"
+	[ -n "$start" ] || start=00:00
+	[ -n "$end" ] || end=23:59
+	valid_time "$start" || return 1
+	valid_time "$end" || return 1
+	now="$(date +%H:%M)"
+	now_min="$(time_to_min "$now")"
+	start_min="$(time_to_min "$start")"
+	end_min="$(time_to_min "$end")"
+	if [ "$start_min" -le "$end_min" ]; then
+		[ "$now_min" -ge "$start_min" ] && [ "$now_min" -le "$end_min" ]
+	else
+		[ "$now_min" -ge "$start_min" ] || [ "$now_min" -le "$end_min" ]
+	fi
+}
+
+valid_ip_target() {
+	case "$1" in
+		''|*[!0-9A-Fa-f:.\/-]*) return 1 ;;
+	esac
+	case "$1" in
+		*:*)
+			case "$1" in
+				*/*) prefix=${1##*/}; valid_uint "$prefix" && [ "$prefix" -le 128 ] || return 1 ;;
+			esac
+			;;
+		*/*) prefix=${1##*/}; valid_uint "$prefix" && [ "$prefix" -le 32 ] || return 1 ;;
+	esac
+	return 0
+}
+
+valid_mac() {
+	case "$1" in
+		[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+valid_ports() {
+	case "$1" in
+		''|*[!0-9,-]*) return 1 ;;
+	esac
+	for part in $(echo "$1" | tr ',' ' '); do
+		case "$part" in
+			''|*[!0-9-]*) return 1 ;;
+			*)
+				case "$part" in
+					*-*)
+						left=${part%-*}; right=${part#*-}
+						valid_uint "$left" && valid_uint "$right" || return 1
+						[ "$left" -ge 1 ] && [ "$right" -le 65535 ] && [ "$left" -le "$right" ] || return 1
+						;;
+					*) valid_uint "$part" && [ "$part" -ge 1 ] && [ "$part" -le 65535 ] || return 1 ;;
+				esac
+				;;
+		esac
+	done
+}
+
+valid_protocol() {
+	[ "$1" = any ] || [ "$1" = tcp ] || [ "$1" = udp ] || [ "$1" = tcp_udp ]
+}
+
+interface_device() {
+	name="$1"
+	device="$(ubus -S call "network.interface.$name" status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null || true)"
+	[ -n "$device" ] || device="$(ubus -S call "network.interface.$name" status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null || true)"
+	printf '%s' "$device"
+}
+
+sqm_conflict() {
+	interface="$1"
+	device="$2"
+	for section in $(uci -q show sqm 2>/dev/null | sed -n 's/^sqm\.\([^.=]*\)=queue$/\1/p'); do
+		[ "$(uci -q get "sqm.$section.enabled" 2>/dev/null || true)" = 1 ] || continue
+		sqm_interface="$(uci -q get "sqm.$section.interface" 2>/dev/null || true)"
+		[ "$sqm_interface" = "$interface" ] || [ "$sqm_interface" = "$device" ] || continue
+		return 0
+	done
+	return 1
+}
+
+write_nft_header() {
+	NFT_FILE="$STATE_DIR/rules.nft"
+	: > "$NFT_FILE"
+	if nft list table inet "$MANAGER_NAME" >/dev/null 2>&1; then
+		echo "destroy table inet $MANAGER_NAME" >> "$NFT_FILE"
+	fi
+	if nft list table bridge "${MANAGER_NAME}_mac" >/dev/null 2>&1; then
+		echo "destroy table bridge ${MANAGER_NAME}_mac" >> "$NFT_FILE"
+	fi
+	cat >> "$NFT_FILE" <<EOF_NFT
+add table inet $MANAGER_NAME
+add chain inet $MANAGER_NAME forward { type filter hook forward priority -150; policy accept; }
+add table bridge ${MANAGER_NAME}_mac
+add chain bridge ${MANAGER_NAME}_mac prerouting { type filter hook prerouting priority -150; policy accept; }
+add chain bridge ${MANAGER_NAME}_mac forward { type filter hook forward priority -150; policy accept; }
+EOF_NFT
+}
+
+nft_ports() {
+	[ -n "$1" ] && printf '%s' "{ $1 }"
+}
+
+emit_ip_nft() {
+	family="$1"
+	target="$2"
+	protocol="$3"
+	src_ports="$4"
+	dst_ports="$5"
+	mark="$6"
+	prefix="$family"
+	case "$protocol" in
+		tcp)
+			proto='tcp'
+			;;
+		udp)
+			proto='udp'
+			;;
+		 tcp_udp)
+			for proto in tcp udp; do
+				emit_ip_nft_proto "$prefix" "$target" "$proto" "$src_ports" "$dst_ports" "$mark"
+			done
+			return 0
+			;;
+		any)
+			proto=''
+			;;
+		*) return 1 ;;
+	esac
+	emit_ip_nft_proto "$prefix" "$target" "$proto" "$src_ports" "$dst_ports" "$mark"
+}
+
+emit_ip_nft_proto() {
+	prefix="$1"
+	target="$2"
+	proto="$3"
+	src_ports="$4"
+	dst_ports="$5"
+	mark="$6"
+	target_expr="$target"
+	case "$target" in
+		*-*) target_expr="{ $target }" ;;
+	esac
+	src_expr="$prefix saddr $target_expr"
+	dst_expr="$prefix daddr $target_expr"
+	up="$src_expr"
+	down="$dst_expr"
+	[ -n "$proto" ] && up="$up $proto" && down="$down $proto"
+	[ -n "$src_ports" ] && up="$up sport $(nft_ports "$src_ports")" && down="$down dport $(nft_ports "$src_ports")"
+	[ -n "$dst_ports" ] && up="$up dport $(nft_ports "$dst_ports")" && down="$down sport $(nft_ports "$dst_ports")"
+	printf 'add rule inet %s forward %s meta mark set %s\n' "$MANAGER_NAME" "$up" "$mark" >> "$STATE_DIR/rules.nft"
+	printf 'add rule inet %s forward %s meta mark set %s\n' "$MANAGER_NAME" "$down" "$mark" >> "$STATE_DIR/rules.nft"
+}
+
+emit_mac_nft() {
+	family="$1"
+	mac="$2"
+	mark="$3"
+	printf 'add rule bridge %s_mac prerouting ether type %s ether saddr %s meta mark set %s\n' "$MANAGER_NAME" "$family" "$mac" "$mark" >> "$STATE_DIR/rules.nft"
+	printf 'add rule bridge %s_mac forward ether type %s ether daddr %s meta mark set %s\n' "$MANAGER_NAME" "$family" "$mac" "$mark" >> "$STATE_DIR/rules.nft"
+}
+
+setup_qdisc() {
+	device="$1"
+	rate_field="$2"
+	qdisc="$3"
+	[ -n "$device" ] || return 1
+	printf '%s\n' "$device" >> "$STATE_DIR/devices"
+	tc qdisc del dev "$device" root handle 1: >/dev/null 2>&1 || true
+	tc qdisc add dev "$device" root handle 1: htb default 1 || return 1
+	tc class add dev "$device" parent 1: classid 1:1 htb rate "${PARENT_RATE}kbit" ceil "${PARENT_RATE}kbit" || return 1
+	if [ "$qdisc" = cake ]; then
+		tc qdisc add dev "$device" parent 1:1 handle 9000: cake besteffort || return 1
+	else
+		tc qdisc add dev "$device" parent 1:1 handle 9000: fq_codel || return 1
+	fi
+	classes=''
+	while IFS='|' read -r mark class kind target protocol src_ports dst_ports upload download family; do
+		[ -n "$mark" ] || continue
+		rate="$upload"
+		[ "$rate_field" = download ] && rate="$download"
+		valid_rate "$rate" || continue
+		[ "$rate" -gt 0 ] || rate=$((PARENT_RATE / 8))
+		rate_kbit=$((rate * 8))
+		[ "$rate_kbit" -gt 0 ] || rate_kbit=1
+		case " $classes " in
+			*" $class "*) ;;
+			*)
+				classes="$classes $class"
+				tc class add dev "$device" parent 1: classid "1:$class" htb rate "${rate_kbit}kbit" ceil "${rate_kbit}kbit" || return 1
+				if [ "$qdisc" = cake ]; then
+					tc qdisc add dev "$device" parent "1:$class" handle "${class}01:" cake besteffort || return 1
+				else
+					tc qdisc add dev "$device" parent "1:$class" handle "${class}01:" fq_codel || return 1
+				fi
+				;;
+		esac
+		tc filter add dev "$device" parent 1: protocol all prio 100 handle "$mark" fw classid "1:$class" || return 1
+	done < "$STATE_DIR/entries"
+
+}
+
+stop_all() {
+	if [ -f "$STATE_DIR/devices" ]; then
+		while IFS= read -r device; do
+			[ -n "$device" ] || continue
+			tc qdisc del dev "$device" root handle 1: >/dev/null 2>&1 || true
+		done < "$STATE_DIR/devices"
+	fi
+	if nft list table inet "$MANAGER_NAME" >/dev/null 2>&1; then
+		nft delete table inet "$MANAGER_NAME" >/dev/null 2>&1 || true
+	fi
+	if nft list table bridge "${MANAGER_NAME}_mac" >/dev/null 2>&1; then
+		nft delete table bridge "${MANAGER_NAME}_mac" >/dev/null 2>&1 || true
+	fi
+	rm -f "$STATE_DIR/devices" "$STATE_DIR/entries" "$STATE_DIR/rules.nft" "$STATE_DIR/status"
+}
+
+apply_all() {
+	global_enabled="$(uci_get main enabled)"
+	qdisc="$(uci_get main qdisc)"
+	[ -n "$global_enabled" ] || global_enabled=0
+	[ -n "$qdisc" ] || qdisc=cake
+	valid_bool "$global_enabled" || return 1
+	[ "$qdisc" = cake ] || [ "$qdisc" = fq_codel ] || return 1
+	stop_all
+	if [ "$global_enabled" != 1 ]; then
+		printf 'enabled=0\nqdisc=%s\nactive=0\n' "$qdisc" > "$STATE_DIR/status"
+		return 0
+	fi
+	: > "$STATE_DIR/entries"
+	: > "$STATE_DIR/devices"
+	write_nft_header
+	wan_interface=''
+	wan_device=''
+	lan_device="$(interface_device lan)"
+	[ -n "$lan_device" ] || lan_device=br-lan
+	mark_index=0
+	next_class=10
+	for kind in ip_rule mac_rule; do
+		for section in $(sections "$kind"); do
+			rule_active "$section" || continue
+			interface="$(uci_get "$section" interface)"
+			[ -n "$interface" ] || continue
+			if [ -n "$wan_interface" ] && [ "$interface" != "$wan_interface" ]; then
+				printf 'error=活动规则必须使用同一线路，请拆分后分别启用\n' > "$STATE_DIR/status"
+				return 1
+			fi
+			if [ -z "$wan_interface" ]; then
+				wan_interface="$interface"
+				wan_device="$(interface_device "$interface")"
+			fi
+			[ -n "$wan_device" ] || continue
+			if [ "$kind" = ip_rule ]; then
+				protocol="$(uci_get "$section" protocol)"
+				[ -n "$protocol" ] || protocol=any
+				src_ports="$(uci_get "$section" src_ports)"
+				dst_ports="$(uci_get "$section" dst_ports)"
+				valid_protocol "$protocol" || continue
+				[ "$protocol" = any ] && src_ports='' && dst_ports=''
+				[ -z "$src_ports" ] || valid_ports "$src_ports" || continue
+				[ -z "$dst_ports" ] || valid_ports "$dst_ports" || continue
+				mode="$(uci_get "$section" mode)"
+				[ "$mode" = shared ] || mode=independent
+				shared_class=''
+				if [ "$mode" = shared ]; then
+					shared_class="$next_class"
+					next_class=$((next_class + 1))
+				fi
+				family='ip'
+				for target in $(uci_get "$section" targets); do
+					valid_ip_target "$target" || continue
+					case "$target" in *:*) family=ip6 ;; *) family=ip ;; esac
+					mark=$((MARK_BASE + mark_index))
+					if [ "$mode" = shared ]; then class="$shared_class"; else class="$next_class"; next_class=$((next_class + 1)); fi
+					mark_index=$((mark_index + 1))
+					upload="$(uci_get "$section" upload_kbyte)"
+					download="$(uci_get "$section" download_kbyte)"
+					valid_rate "$upload" || upload=0
+					valid_rate "$download" || download=0
+					printf '%s|%s|ip|%s|%s|%s|%s|%s|%s|%s\n' "$mark" "$class" "$target" "$protocol" "$src_ports" "$dst_ports" "$upload" "$download" "$family" >> "$STATE_DIR/entries"
+					emit_ip_nft "$family" "$target" "$protocol" "$src_ports" "$dst_ports" "$mark"
+				done
+			else
+				mode="$(uci_get "$section" mode)"
+				[ "$mode" = shared ] || mode=independent
+				shared_class=''
+				if [ "$mode" = shared ]; then
+					shared_class="$next_class"
+					next_class=$((next_class + 1))
+				fi
+				family="$(uci_get "$section" family)"
+				[ "$family" = 6 ] && ether_family=ip6 || ether_family=ip
+				for target in $(uci_get "$section" targets); do
+					valid_mac "$target" || continue
+					mark=$((MARK_BASE + mark_index))
+					if [ "$mode" = shared ]; then class="$shared_class"; else class="$next_class"; next_class=$((next_class + 1)); fi
+					mark_index=$((mark_index + 1))
+					upload="$(uci_get "$section" upload_kbyte)"
+					download="$(uci_get "$section" download_kbyte)"
+					valid_rate "$upload" || upload=0
+					valid_rate "$download" || download=0
+					printf '%s|%s|mac|%s|any|||%s|%s|%s\n' "$mark" "$class" "$target" "$upload" "$download" "$ether_family" >> "$STATE_DIR/entries"
+					emit_mac_nft "$ether_family" "$target" "$mark"
+					done
+			fi
+		done
+	done
+	if [ "$mark_index" -eq 0 ]; then
+		printf '%s\n' "enabled=1" "qdisc=$qdisc" "active=0" > "$STATE_DIR/status"
+		return 0
+	fi
+	[ -n "$wan_device" ] || {
+		printf 'error=无法解析线路设备\n' > "$STATE_DIR/status"
+		return 1
+	}
+	if sqm_conflict "$wan_interface" "$wan_device"; then
+		printf 'error=线路%s已启用普通SQM，请先停用后再启用终端限速\n' "$wan_interface" > "$STATE_DIR/status"
+		return 1
+	fi
+	if ! nft -f "$STATE_DIR/rules.nft"; then
+		stop_all
+		printf 'error=终端限速 nft 规则应用失败，请检查 nftables 支持\n' > "$STATE_DIR/status"
+		return 1
+	fi
+	if ! setup_qdisc "$wan_device" upload "$qdisc"; then
+		stop_all
+		printf 'error=终端限速上行队列应用失败，请检查 tc 与网卡支持\n' > "$STATE_DIR/status"
+		return 1
+	fi
+	if [ "$lan_device" != "$wan_device" ] && ! setup_qdisc "$lan_device" download "$qdisc"; then
+		stop_all
+		printf 'error=终端限速下行队列应用失败，请检查 LAN 网桥支持\n' > "$STATE_DIR/status"
+		return 1
+	fi
+	active_count="$mark_index"
+	printf '%s\n' "enabled=1" "qdisc=$qdisc" "active=$active_count" "interface=$wan_interface" "wan_device=$wan_device" "lan_device=$lan_device" > "$STATE_DIR/status"
+}
+
+status() {
+	if [ -f "$STATE_DIR/status" ]; then
+		cat "$STATE_DIR/status"
+	else
+		printf 'enabled=%s\nqdisc=%s\nactive=0\n' "$(uci_get main enabled)" "$(uci_get main qdisc)"
+	fi
+}
+
+run_daemon_apply() {
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		apply_all >/dev/null 2>&1 || true
+		rmdir "$LOCK_DIR" 2>/dev/null || true
+	fi
+}
+
+daemon() {
+	run_daemon_apply
+	while :; do
+		sleep 60
+		run_daemon_apply
+	done
+}
+
+acquire_lock() {
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		return 1
+	fi
+	trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+	return 0
+}
+
+case "${1-}" in
+	apply)
+		acquire_lock || exit 1
+		apply_all
+		;;
+	stop)
+		acquire_lock || exit 0
+		stop_all
+		;;
+	status)
+		status
+		;;
+	daemon)
+		daemon
+		;;
+	*)
+		printf '用法：%s {apply|stop|status|daemon}\n' "$0" >&2
+		exit 1
+		;;
+esac
+
+
+

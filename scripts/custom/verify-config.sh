@@ -44,6 +44,9 @@ esac
 
 for symbol in \
 	CONFIG_PACKAGE_custom-firmware-defaults \
+	CONFIG_PACKAGE_luci-app-terminal-limit \
+	CONFIG_PACKAGE_luci-app-sqm \
+	CONFIG_PACKAGE_sqm-scripts \
 	CONFIG_PACKAGE_dnsmasq-full \
 	CONFIG_PACKAGE_luci-theme-argon \
 	CONFIG_PACKAGE_luci-app-passwall \

@@ -1,0 +1,55 @@
+<%+header%>
+<%
+local dispatcher = require "luci.dispatcher"
+local function selected(value, current)
+	return value == current and ' selected="selected"' or ""
+end
+local function checked(value)
+	return value and ' checked="checked"' or ""
+end
+local is_ip = kind == "ip"
+local title = is_ip and "IP限速" or "MAC限速"
+local list_url = dispatcher.build_url("admin", "network", "terminal-limit", kind)
+local save_url = dispatcher.build_url("admin", "network", "terminal-limit", "save")
+local time_value = (rule.time_start or "00:00") .. "-" .. (rule.time_end or "23:59")
+local function has_day(day)
+	for _, value in ipairs(rule.weekdays or {}) do if value == day then return true end end
+	return false
+end
+%>
+<div class="cbi-map">
+	<h2 name="content"><%=rule.id ~= "" and "编辑" or "添加"%><%=title%>规则</h2>
+	<% if message and #message > 0 then %><div class="alert-message warning"><%=pcdata(message)%></div><% end %>
+	<form method="post" action="<%=pcdata(save_url)%>">
+		<input type="hidden" name="token" value="<%=token%>" />
+		<input type="hidden" name="kind" value="<%=pcdata(kind)%>" />
+		<input type="hidden" name="id" value="<%=pcdata(rule.id)%>" />
+		<fieldset class="cbi-section">
+			<legend>规则设置</legend>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-enabled">状态</label><div class="cbi-value-field"><input id="terminal-enabled" type="checkbox" name="enabled" value="1"<%=checked(rule.enabled == "1" or rule.enabled == true)%> /> 启用</div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-interface">线路</label><div class="cbi-value-field"><select id="terminal-interface" name="interface"><% for _, interface in ipairs(interfaces) do %><option value="<%=pcdata(interface)%>"<%=selected(interface, rule.interface)%>><%=pcdata(interface)%></option><% end %></select></div></div>
+			<% if is_ip then %>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-targets">IP或IP段</label><div class="cbi-value-field"><textarea id="terminal-targets" name="targets" rows="4" cols="50" required="required" placeholder="192.168.50.100&#10;192.168.50.110-192.168.50.120"><%=pcdata(table.concat(rule.targets or {}, "\n"))%></textarea><div class="cbi-value-description">支持单个IP、CIDR或起止IP，每行一个，也可用逗号分隔。</div></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-protocol">协议</label><div class="cbi-value-field"><select id="terminal-protocol" name="protocol" onchange="terminalPorts()"><option value="tcp"<%=selected("tcp", rule.protocol)%>>TCP</option><option value="udp"<%=selected("udp", rule.protocol)%>>UDP</option><option value="tcp_udp"<%=selected("tcp_udp", rule.protocol)%>>TCP+UDP</option><option value="any"<%=selected("any", rule.protocol)%>>任意</option></select></div></div>
+			<div class="cbi-value terminal-port"><label class="cbi-value-title" for="terminal-src-ports">源端口</label><div class="cbi-value-field"><input id="terminal-src-ports" name="src_ports" type="text" value="<%=pcdata(rule.src_ports or "")%>" placeholder="例如 1000,2000-2010" /></div></div>
+			<div class="cbi-value terminal-port"><label class="cbi-value-title" for="terminal-dst-ports">目的端口</label><div class="cbi-value-field"><input id="terminal-dst-ports" name="dst_ports" type="text" value="<%=pcdata(rule.dst_ports or "")%>" placeholder="例如 80,443" /></div></div>
+			<% else %>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-family">协议栈</label><div class="cbi-value-field"><select id="terminal-family" name="family"><option value="4"<%=selected("4", rule.family)%>>IPv4</option><option value="6"<%=selected("6", rule.family)%>>IPv6</option></select></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-targets">MAC或MAC列表</label><div class="cbi-value-field"><textarea id="terminal-targets" name="targets" rows="4" cols="50" required="required" placeholder="AA:BB:CC:DD:EE:FF"><%=pcdata(table.concat(rule.targets or {}, "\n"))%></textarea><div class="cbi-value-description">每行一个MAC，也可用逗号分隔。</div></div></div>
+			<% end %>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-mode">限速模式</label><div class="cbi-value-field"><select id="terminal-mode" name="mode"><option value="independent"<%=selected("independent", rule.mode)%>>独立限速</option><option value="shared"<%=selected("shared", rule.mode)%>>共享限速</option></select></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-upload">上行(KB/s)</label><div class="cbi-value-field"><input id="terminal-upload" name="upload_kbyte" type="number" min="0" max="12500000" required="required" value="<%=pcdata(rule.upload_kbyte)%>" /></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-download">下行(KB/s)</label><div class="cbi-value-field"><input id="terminal-download" name="download_kbyte" type="number" min="0" max="12500000" required="required" value="<%=pcdata(rule.download_kbyte)%>" /></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">周期</label><div class="cbi-value-field"><label><input type="checkbox" id="terminal-day-all" onclick="toggleTerminalDays(this.checked)" /> 全选</label> <% local days = { {"1","周一"},{"2","周二"},{"3","周三"},{"4","周四"},{"5","周五"},{"6","周六"},{"7","周日"} } for _, day in ipairs(days) do %><label style="margin-left:8px"><input class="terminal-day" type="checkbox" name="weekdays.<%=day[1]%>" value="<%=day[1]%>"<%=checked(has_day(day[1]))%> /> <%=day[2]%></label><% end %></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-time">时间段</label><div class="cbi-value-field"><input id="terminal-time" name="time" type="text" pattern="[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9]" value="<%=pcdata(time_value)%>" placeholder="00:00-23:59" required="required" /></div></div>
+			<div class="cbi-value"><label class="cbi-value-title" for="terminal-comment">备注</label><div class="cbi-value-field"><input id="terminal-comment" name="comment" type="text" maxlength="128" value="<%=pcdata(rule.comment or "")%>" /></div></div>
+		</fieldset>
+		<div class="cbi-page-actions"><input class="btn cbi-button cbi-button-save" type="submit" value="保存" /> <a class="btn cbi-button cbi-button-reset" href="<%=pcdata(list_url)%>">取消</a></div>
+	</form>
+</div>
+<script type="text/javascript">
+function toggleTerminalDays(checked) { var boxes = document.querySelectorAll('.terminal-day'); for (var i = 0; i < boxes.length; i++) boxes[i].checked = checked; }
+function terminalPorts() { var disabled = document.getElementById('terminal-protocol').value === 'any'; var fields = document.querySelectorAll('.terminal-port input'); for (var i = 0; i < fields.length; i++) { fields[i].disabled = disabled; if (disabled) fields[i].value = ''; } }
+terminalPorts();
+</script>
+<%+footer%>

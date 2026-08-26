@@ -1,0 +1,11 @@
+{
+  "luci-app-terminal-limit": {
+    "description": "Grant LuCI access to terminal bandwidth limits",
+    "read": {
+      "uci": [ "terminal_limit" ]
+    },
+    "write": {
+      "uci": [ "terminal_limit" ]
+    }
+  }
+}
