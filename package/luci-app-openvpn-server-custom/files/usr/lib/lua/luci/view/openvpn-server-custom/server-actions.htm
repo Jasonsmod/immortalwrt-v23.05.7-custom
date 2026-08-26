@@ -4,8 +4,65 @@ local dispatcher = require "luci.dispatcher"
 local add_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-add")
 local download_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-download")
 local action_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-action")
+local extra_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-extra")
 local cbid = self:cbid(section)
 %>
+<style>
+.openvpn-server-client-panel {
+	max-width: 720px;
+}
+.openvpn-server-client-panel .cbi-section-table {
+	width: 720px;
+	max-width: 100%;
+}
+.openvpn-server-client-panel .cbi-value-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.openvpn-server-client-panel .cbi-value-field input[type="text"] {
+	width: 220px;
+}
+.openvpn-server-client-table {
+	width: 100%;
+	max-width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+.openvpn-server-client-table th,
+.openvpn-server-client-table td {
+	box-sizing: border-box;
+	padding: 8px 10px;
+	text-align: center;
+	vertical-align: middle;
+	white-space: nowrap;
+}
+.openvpn-server-client-table th:first-child,
+.openvpn-server-client-table td:first-child {
+	text-align: left;
+}
+.openvpn-server-client-table th {
+	font-weight: 600;
+}
+.openvpn-server-client-table td:first-child {
+	font-size: 15px;
+	font-weight: 500;
+}
+.openvpn-server-client-table .client-actions {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 8px;
+}
+.openvpn-server-client-table .btn {
+	margin: 0;
+	min-width: 82px;
+}
+.openvpn-server-client-table .client-actions .btn {
+	min-width: 58px;
+}
+</style>
 <input id="server-client-name" type="hidden" name="server_client_name" value="" />
 <input id="server-client-action" type="hidden" name="server_client_action" value="" />
 <% if not self.pki_ready then %>
@@ -15,53 +72,69 @@ local cbid = self:cbid(section)
 	value="<%=pcdata(self.inputtitle)%>"
 	class="btn cbi-button cbi-button-apply" />
 <% else %>
-<div class="cbi-value">
-	<label class="cbi-value-title" for="server-client-new-name">用户名</label>
-	<div class="cbi-value-field">
-		<input id="server-client-new-name" type="text" maxlength="32" />
-		<input type="submit" class="btn cbi-button cbi-button-add" value="新增用户"
-			formaction="<%=pcdata(add_url)%>" formmethod="post"
-			onclick="var input=document.getElementById('server-client-new-name'); var name=input.value.trim(); if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){alert('用户名格式无效');return false;} document.getElementById('server-client-name').value=name;" />
+<div class="openvpn-server-client-panel">
+	<div class="cbi-value">
+		<label class="cbi-value-title" for="server-client-new-name">用户名</label>
+		<div class="cbi-value-field">
+			<input id="server-client-new-name" type="text" maxlength="32" />
+			<input type="submit" class="btn cbi-button cbi-button-add" value="新增用户"
+				formaction="<%=pcdata(add_url)%>" formmethod="post"
+				onclick="var input=document.getElementById('server-client-new-name'); var name=input.value.trim(); if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){alert('用户名格式无效');return false;} document.getElementById('server-client-name').value=name;" />
+		</div>
 	</div>
-</div>
-<div class="table cbi-section-table">
-	<table class="table" width="100%" cellspacing="0" cellpadding="0" border="0">
-		<thead>
-			<tr>
-				<th>用户名</th>
-				<th>状态</th>
-				<th>下载 OVPN</th>
-				<th>操作</th>
-			</tr>
-		</thead>
-		<tbody>
-		<% for _, user in ipairs(self.client_users or {}) do %>
-			<tr>
-				<td><%=pcdata(user.name)%></td>
-				<td><%=user.enabled and "已启用" or "已停用"%></td>
-				<td>
-					<input type="submit" class="btn cbi-button cbi-button-download" value="下载 OVPN"
-						formaction="<%=pcdata(download_url)%>" formmethod="post"
-						onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>';" />
-				</td>
-				<td>
-					<% if user.enabled then %>
-					<input type="submit" class="btn cbi-button cbi-button-reset" value="停用"
-						formaction="<%=pcdata(action_url)%>" formmethod="post"
-						onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='disable';" />
-					<% else %>
-					<input type="submit" class="btn cbi-button cbi-button-apply" value="启用"
-						formaction="<%=pcdata(action_url)%>" formmethod="post"
-						onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='enable';" />
-					<% end %>
-					<input type="submit" class="btn cbi-button cbi-button-remove" value="删除"
-						formaction="<%=pcdata(action_url)%>" formmethod="post"
-						onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='delete'; return confirm('确定删除该客户端用户？');" />
-				</td>
-			</tr>
-		<% end %>
-		</tbody>
-	</table>
+	<div class="table cbi-section-table">
+		<table class="table openvpn-server-client-table" cellspacing="0" cellpadding="0" border="0">
+			<colgroup>
+				<col style="width: 22%;" />
+				<col style="width: 14%;" />
+				<col style="width: 20%;" />
+				<col style="width: 20%;" />
+				<col style="width: 24%;" />
+			</colgroup>
+			<thead>
+				<tr>
+					<th>用户名</th>
+					<th>状态</th>
+					<th>下载 OVPN</th>
+					<th>附加配置</th>
+					<th>操作</th>
+				</tr>
+			</thead>
+			<tbody>
+			<% for _, user in ipairs(self.client_users or {}) do %>
+				<tr>
+					<td><%=pcdata(user.name)%></td>
+					<td><%=user.enabled and "已启用" or "已停用"%></td>
+					<td>
+						<input type="submit" class="btn cbi-button cbi-button-download" value="下载 OVPN"
+							formaction="<%=pcdata(download_url)%>" formmethod="post"
+							onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>';" />
+					</td>
+					<td>
+						<a class="btn cbi-button cbi-button-edit"
+							href="<%=pcdata(extra_url .. '?server_client_name=' .. user.name)%>">附加配置</a>
+					</td>
+					<td>
+						<div class="client-actions">
+							<% if user.enabled then %>
+							<input type="submit" class="btn cbi-button cbi-button-reset" value="停用"
+								formaction="<%=pcdata(action_url)%>" formmethod="post"
+								onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='disable';" />
+							<% else %>
+							<input type="submit" class="btn cbi-button cbi-button-apply" value="启用"
+								formaction="<%=pcdata(action_url)%>" formmethod="post"
+								onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='enable';" />
+							<% end %>
+							<input type="submit" class="btn cbi-button cbi-button-remove" value="删除"
+								formaction="<%=pcdata(action_url)%>" formmethod="post"
+								onclick="document.getElementById('server-client-name').value='<%=pcdata(user.name)%>'; document.getElementById('server-client-action').value='delete'; return confirm('确定删除该客户端用户？');" />
+						</div>
+					</td>
+				</tr>
+			<% end %>
+			</tbody>
+		</table>
+	</div>
 </div>
 <% end %>
 <%+cbi/valuefooter%>

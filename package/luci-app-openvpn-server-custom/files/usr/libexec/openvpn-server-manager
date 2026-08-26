@@ -4,6 +4,7 @@ set -eu
 
 ACTION="${1-}"
 CLIENT_NAME="${2-}"
+CLIENT_EXTRA_FILE="${3-}"
 EASYRSA_DIR='/etc/easy-rsa'
 PKI_DIR="$EASYRSA_DIR/pki"
 OPENVPN_DIR='/etc/openvpn/server'
@@ -17,6 +18,7 @@ export EASYRSA_BATCH=1
 umask 077
 
 OPENVPN_CONFIG="$OPENVPN_DIR/custom_server.conf"
+CCD_DIR='/etc/openvpn/ccd'
 ACCOUNT_DB='/etc/openvpn/server-accounts'
 AUTH_SCRIPT='/usr/libexec/openvpn-server-auth'
 CLIENT_CHECK_SCRIPT='/usr/libexec/openvpn-server-client-check'
@@ -381,6 +383,59 @@ set_client_state() {
         printf '客户端用户 %s 已停用。\n' "$name"
 }
 
+validate_client_extra() {
+    local size="$1"
+    [ -f "$CLIENT_EXTRA_FILE" ] || fail '客户端附加配置临时文件不存在。'
+    size="$(wc -c < "$CLIENT_EXTRA_FILE" | tr -d '[:space:]')"
+    valid_uint "$size" && [ "$size" -le 32768 ] || fail '客户端附加配置不能超过32KiB。'
+    awk '
+        {
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            if (line == "" || line ~ /^[#;]/) next
+            if (line !~ /^push[[:space:]]+"[^"]*"[[:space:]]*$/) exit 1
+        }
+    ' "$CLIENT_EXTRA_FILE" || fail '客户端附加配置只允许填写 push 指令、空行或注释。'
+}
+
+save_client_extra() {
+    local name="$CLIENT_NAME" target temp
+
+    valid_client_name "$name" || fail '客户端用户名格式无效。'
+    case "$CLIENT_EXTRA_FILE" in
+        /tmp/openvpn-client-extra.*) ;;
+        *) fail '客户端附加配置临时文件路径无效。' ;;
+    esac
+    validate_client_extra "$CLIENT_EXTRA_FILE"
+    target="$CCD_DIR/$name"
+    if awk '
+        {
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            if (line != "" && line !~ /^[#;]/) found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$CLIENT_EXTRA_FILE"; then
+        temp="$(mktemp "$CCD_DIR/$name.XXXXXX")"
+        cp "$CLIENT_EXTRA_FILE" "$temp"
+        chmod 0644 "$temp"
+        mv -f "$temp" "$target"
+        printf '客户端用户 %s 的附加配置已保存。\n' "$name"
+    else
+        rm -f "$target"
+        printf '客户端用户 %s 的附加配置已清空。\n' "$name"
+    fi
+}
+
+read_client_extra() {
+    local name="$CLIENT_NAME"
+
+    valid_client_name "$name" || fail '客户端用户名格式无效。'
+    [ -f "$CCD_DIR/$name" ] || exit 0
+    cat "$CCD_DIR/$name"
+}
 delete_client() {
     local name="$CLIENT_NAME"
     valid_client_name "$name" || fail '客户端用户名格式无效。'
@@ -406,7 +461,7 @@ render_server_config() {
     local proto="$1" port="$2" tunnel_type="$3" tunnel_device="$4"
     local vpn_network="$5" vpn_netmask="$6" max_clients="$7"
     local lan_network="$8" lan_netmask="$9" client_dns="${10}"
-    local data_cipher="${11}" lzo="${12}" auth_mode="${13}" client_isolation="${14}" redirect_gateway="${15}" extra_config="${16}"
+    local data_cipher="${11}" lzo="${12}" auth_mode="${13}" client_isolation="${14}" extra_config="${15}"
     local route route_network prefix route_netmask config_tmp
 
     config_tmp="$OPENVPN_CONFIG.tmp.$$"
@@ -423,13 +478,13 @@ render_server_config() {
         printf 'key %s\n' "$PKI_DIR/private/server.key"
         printf 'dh none\n'
         printf 'crl-verify %s\n' "$PKI_DIR/crl.pem"
+        printf 'client-config-dir %s\n' "$CCD_DIR"
         printf 'tls-version-min 1.2\n'
         printf 'auth SHA256\n'
         printf 'keepalive 10 120\n'
         printf 'persist-key\n'
         printf 'persist-tun\n'
         [ "$client_isolation" = '0' ] && printf 'client-to-client\n'
-        [ "$redirect_gateway" = '1' ] && printf 'push "redirect-gateway def1 bypass-dhcp"\n'
         printf 'user nobody\n'
         printf 'group nogroup\n'
         printf 'status /var/run/openvpn-server.status\n'
@@ -471,7 +526,7 @@ EOF_ROUTES
 apply_configuration() {
     local enabled proto port remote_host bind_interface vpn_network vpn_netmask
     local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
-    local auth_mode tunnel_type tunnel_device lzo client_isolation redirect_gateway extra_config route
+    local auth_mode tunnel_type tunnel_device lzo extra_config route
 
     enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
     proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
@@ -488,7 +543,6 @@ apply_configuration() {
     tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
     lzo="$(uci -q get openvpn_server.main.lzo || printf '0')"
     client_isolation="$(uci -q get openvpn_server.main.client_isolation || printf '0')"
-    redirect_gateway="$(uci -q get openvpn_server.main.redirect_gateway || printf '0')"
     extra_config="$(uci -q get openvpn_server.main.extra_config || true)"
     data_cipher=''
     if uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1; then
@@ -501,7 +555,6 @@ apply_configuration() {
     valid_tunnel_type "$tunnel_type" || fail '隧道类型只能是 TUN 或 TAP。'
     valid_boolean "$lzo" || fail 'LZO 开关值无效。'
     valid_boolean "$client_isolation" || fail '客户端通信隔离开关值无效。'
-    valid_boolean "$redirect_gateway" || fail '客户端所有流量走远程网关开关值无效。'
     valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '端口必须在 1 到 65535 之间。'
     valid_remote_interface "$bind_interface" || fail '线路配置无效。'
     [ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '自定义 DDNS 地址格式无效。'
@@ -569,6 +622,8 @@ if [ "$client_isolation" = '0' ]; then
 else
     uci -q delete "openvpn.$OPENVPN_SECTION.client_to_client"
 fi
+uci -q set "openvpn.$OPENVPN_SECTION.client_config_dir=$CCD_DIR"
+remove_managed_push managed_push_gateway
 set_openvpn_default user 'nobody'
 set_openvpn_default group 'nogroup'
 set_openvpn_default status '/var/run/openvpn-server.status'
@@ -586,14 +641,10 @@ set_openvpn_default verb '3'
 
 replace_managed_push managed_push_route "route $lan_network $lan_netmask"
 replace_managed_push managed_push_dns "dhcp-option DNS $client_dns"
-if [ "$redirect_gateway" = '1' ]; then
-    replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
-else
-    remove_managed_push managed_push_gateway
-fi
+remove_managed_push managed_push_gateway
 
 render_server_config "$proto" "$port" "$tunnel_type" "$tunnel_device" "$vpn_network" "$vpn_netmask" "$max_clients" \
-    "$lan_network" "$lan_netmask" "$client_dns" "$data_cipher" "$lzo" "$auth_mode" "$client_isolation" "$redirect_gateway" "$extra_config"
+    "$lan_network" "$lan_netmask" "$client_dns" "$data_cipher" "$lzo" "$auth_mode" "$client_isolation" "$extra_config"
 
 uci -q commit openvpn
 uci -q commit openvpn_server
@@ -723,13 +774,17 @@ EOF_CLIENTS
 
 export_client() {
     local remote_host bind_interface port proto auth_mode tunnel_type lzo data_cipher
+    local redirect_gateway
 
     auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
     tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
     lzo="$(uci -q get openvpn_server.main.lzo || printf '0')"
     data_cipher="$(uci -q get openvpn_server.main.data_cipher || true)"
+    redirect_gateway="$(uci -q get openvpn_server.main.redirect_gateway || printf '0')"
     valid_auth_mode "$auth_mode" || fail '认证方式配置无效。'
     valid_tunnel_type "$tunnel_type" || fail '隧道类型配置无效。'
+    valid_boolean "$lzo" || fail 'LZO开关配置无效。'
+    valid_boolean "$redirect_gateway" || fail '客户端所有流量走远程网关开关配置无效。'
     if [ "$auth_mode" = 'cert' ] || [ "$auth_mode" = 'both' ]; then
         valid_client_certificate "$CLIENT_NAME" || fail '客户端证书不存在或已经吊销。'
     else
@@ -744,7 +799,7 @@ export_client() {
         remote_host="$(interface_address "$bind_interface" || true)"
         [ -n "$remote_host" ] || fail "无法获取线路$bind_interface的IP地址。"
     fi
-    valid_remote_host "$remote_host" || fail '自定义 DDNS 地址格式无效。'
+    valid_remote_host "$remote_host" || fail '自定义DDNS地址格式无效。'
     case "$proto" in
         tcp-server) proto='tcp-client' ;;
         udp) ;;
@@ -765,6 +820,7 @@ auth SHA256
 auth-nocache
 verb 3
 EOF
+    [ "$redirect_gateway" = '1' ] && printf 'push "redirect-gateway def1 bypass-dhcp"\n'
     [ -z "$data_cipher" ] || printf 'data-ciphers %s\ndata-ciphers-fallback %s\n' "$data_cipher" "$data_cipher"
     [ "$lzo" = '1' ] && printf 'comp-lzo yes\n'
     case "$auth_mode" in
@@ -782,7 +838,6 @@ EOF
         printf '%s\n' '</key>'
     fi
 }
-
 case "$ACTION" in
 	apply) apply_configuration ;;
 	save-account) save_account ;;
@@ -794,8 +849,10 @@ case "$ACTION" in
 	enable-client) set_client_state 1 ;;
 	disable-client) set_client_state 0 ;;
 	delete-client) delete_client ;;
+	save-client-extra) save_client_extra ;;
+	read-client-extra) read_client_extra ;;
 	export-client) export_client ;;
 	list-ciphers) list_data_ciphers ;;
 	recommended-cipher) recommended_data_cipher ;;
-	*) fail '用法：openvpn-server-manager {apply|save-account|delete-account|init-pki|create-client|revoke-client|list-clients|enable-client|disable-client|delete-client|export-client|list-ciphers|recommended-cipher} [参数]' ;;
+	*) fail '用法：openvpn-server-manager {apply|save-account|delete-account|init-pki|create-client|revoke-client|list-clients|enable-client|disable-client|delete-client|save-client-extra|read-client-extra|export-client|list-ciphers|recommended-cipher} [参数]' ;;
 esac

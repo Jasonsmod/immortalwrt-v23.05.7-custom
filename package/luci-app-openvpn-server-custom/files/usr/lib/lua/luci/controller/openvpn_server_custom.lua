@@ -28,6 +28,8 @@ function index()
 	entry({"admin", "vpn", "openvpn-server-custom", "server-client-add"}, post("server_client_add")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "server-client-download"}, post("server_client_download")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "server-client-action"}, post("server_client_action")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "server-client-extra"}, call("server_client_extra")).leaf = true
+	entry({"admin", "vpn", "openvpn-server-custom", "server-client-extra-save"}, post("server_client_extra_save")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "clients"}, call("client_list"), _("客户端配置"), 20).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-edit"}, call("client_edit")).leaf = true
 	entry({"admin", "vpn", "openvpn-server-custom", "client-save"}, post("client_save")).leaf = true
@@ -459,6 +461,71 @@ function server_client_action()
     end
     local result = sys.exec(SERVER_MANAGER .. " " .. commands[action] .. " " .. util.shellquote(name) .. " 2>&1"):gsub("%s+$", "")
     redirect_server_settings(result)
+end
+local function redirect_server_client_extra(name, message)
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-extra") ..
+        "?server_client_name=" .. http.urlencode(name)
+    if message and #message > 0 then
+        url = url .. "&message=" .. http.urlencode(message)
+    end
+    http.redirect(url)
+end
+
+function server_client_extra()
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local template = require "luci.template"
+    local util = require "luci.util"
+    local name = http.formvalue("server_client_name") or ""
+    if not valid_server_client_name(name) then
+        redirect_server_settings("错误：客户端用户名格式无效。")
+        return
+    end
+    local content = sys.exec(SERVER_MANAGER .. " read-client-extra " ..
+        util.shellquote(name) .. " 2>/dev/null")
+    template.render("openvpn-server-custom/server-client-extra", {
+        name = name,
+        content = content or "",
+        message = http.formvalue("message") or ""
+    })
+end
+
+function server_client_extra_save()
+    local dispatcher = require "luci.dispatcher"
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    local fs = require "nixio.fs"
+    local util = require "luci.util"
+    local name = http.formvalue("server_client_name") or ""
+    local content = http.formvalue("client_extra") or ""
+    if not dispatcher.test_post_security() then
+        return
+    end
+    if not valid_server_client_name(name) then
+        redirect_server_settings("错误：客户端用户名格式无效。")
+        return
+    end
+    if #content > 32768 then
+        redirect_server_client_extra(name, "错误：客户端附加配置不能超过32KiB。")
+        return
+    end
+    local stage = sys.exec("mktemp /tmp/openvpn-client-extra.XXXXXX 2>/dev/null"):gsub("%s+$", "")
+    if not stage:match("^/tmp/openvpn%-client%-extra%.[A-Za-z0-9]+$") then
+        redirect_server_client_extra(name, "错误：无法创建安全临时文件。")
+        return
+    end
+    sys.call("chmod 0600 " .. util.shellquote(stage))
+    if not fs.writefile(stage, content) then
+        fs.unlink(stage)
+        redirect_server_client_extra(name, "错误：无法写入客户端附加配置。")
+        return
+    end
+    local result = sys.exec(SERVER_MANAGER .. " save-client-extra " ..
+        util.shellquote(name) .. " " .. util.shellquote(stage) .. " 2>&1"):gsub("%s+$", "")
+    fs.unlink(stage)
+    redirect_server_client_extra(name, result)
 end
 function account_save()
     local dispatcher = require "luci.dispatcher"

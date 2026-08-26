@@ -3,6 +3,9 @@
 MIRROR='https://mirrors.vsean.net/openwrt'
 ROOT_PASSWORD_HASH='$1$immortal$qSmS/2VYmMvAclD4gWaHO0'
 
+mkdir -p /etc/openvpn/ccd
+chmod 0755 /etc/openvpn/ccd
+
 uci -q get system.@imm_init[0] >/dev/null || uci -q add system imm_init >/dev/null
 
 uci -q batch <<EOF

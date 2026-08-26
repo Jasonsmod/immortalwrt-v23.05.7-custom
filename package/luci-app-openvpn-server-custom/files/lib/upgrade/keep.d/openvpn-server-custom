@@ -2,3 +2,4 @@
 /etc/openvpn/server/
 /etc/openvpn/client-custom/
 /etc/openvpn/server-accounts
+/etc/openvpn/ccd/

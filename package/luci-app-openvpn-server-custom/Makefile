@@ -54,6 +54,7 @@ define Package/luci-app-openvpn-server-custom/install
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua $(1)/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/openvpn-server-custom
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/openvpn-server-custom/server-actions.htm $(1)/usr/lib/lua/luci/view/openvpn-server-custom/server-actions.htm
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/openvpn-server-custom/server-client-extra.htm $(1)/usr/lib/lua/luci/view/openvpn-server-custom/server-client-extra.htm
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/openvpn-server-custom/account-list.htm $(1)/usr/lib/lua/luci/view/openvpn-server-custom/account-list.htm
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/openvpn-server-custom/client-list.htm $(1)/usr/lib/lua/luci/view/openvpn-server-custom/client-list.htm
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/openvpn-server-custom/client-edit.htm $(1)/usr/lib/lua/luci/view/openvpn-server-custom/client-edit.htm

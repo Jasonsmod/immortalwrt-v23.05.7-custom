@@ -6,6 +6,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TOPDIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 PACKAGE_DIR="$TOPDIR/package/luci-app-openvpn-server-custom"
 DEFAULTS="$PACKAGE_DIR/files/etc/uci-defaults/90-openvpn-server-custom"
+FIRMWARE_DEFAULTS="$TOPDIR/package/custom-firmware-defaults/files/etc/uci-defaults/99-custom-firmware"
 MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-server-manager"
 AUTH_SCRIPT="$PACKAGE_DIR/files/usr/libexec/openvpn-server-auth"
 CLIENT_CHECK="$PACKAGE_DIR/files/usr/libexec/openvpn-server-client-check"
@@ -13,6 +14,7 @@ CLIENT_MANAGER="$PACKAGE_DIR/files/usr/libexec/openvpn-client-manager"
 CONTROLLER="$PACKAGE_DIR/files/usr/lib/lua/luci/controller/openvpn_server_custom.lua"
 SERVER_MODEL="$PACKAGE_DIR/files/usr/lib/lua/luci/model/cbi/openvpn-server-custom/server.lua"
 ACTIONS_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/server-actions.htm"
+CLIENT_EXTRA_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/server-client-extra.htm"
 CLIENT_LIST_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-list.htm"
 CLIENT_EDIT_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/client-edit.htm"
 ACCOUNT_TEMPLATE="$PACKAGE_DIR/files/usr/lib/lua/luci/view/openvpn-server-custom/account-list.htm"
@@ -37,6 +39,7 @@ for file in \
 	"$PACKAGE_DIR/files/etc/config/openvpn_client_custom" \
 	"$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" \
 	"$DEFAULTS" \
+	"$FIRMWARE_DEFAULTS" \
 	"$MANAGER" \
 	"$AUTH_SCRIPT" \
 	"$CLIENT_CHECK" \
@@ -44,6 +47,7 @@ for file in \
 	"$CONTROLLER" \
 	"$SERVER_MODEL" \
 	"$ACTIONS_TEMPLATE" \
+	"$CLIENT_EXTRA_TEMPLATE" \
 	"$CLIENT_LIST_TEMPLATE" \
 	"$CLIENT_EDIT_TEMPLATE" \
 	"$ACCOUNT_TEMPLATE"
@@ -56,6 +60,7 @@ if [ "$ERRORS" -ne 0 ]; then
 fi
 
 sh -n "$DEFAULTS" || fail_check 'OpenVPN网络初始化脚本语法无效。'
+sh -n "$FIRMWARE_DEFAULTS" || fail_check '自定义固件初始化脚本语法无效。'
 sh -n "$MANAGER" || fail_check 'OpenVPN证书管理脚本语法无效。'
 sh -n "$AUTH_SCRIPT" || fail_check 'OpenVPN账号认证脚本语法无效。'
 sh -n "$CLIENT_CHECK" || fail_check 'OpenVPN证书用户校验脚本语法无效。'
@@ -75,6 +80,14 @@ require_text "$MANAGER" 'AES-128-GCM'
 require_text "$MANAGER" 'set_openvpn_default'
 require_text "$MANAGER" 'replace_managed_push'
 require_text "$MANAGER" 'render_server_config'
+require_text "$MANAGER" 'CCD_DIR='
+require_text "$MANAGER" 'client-config-dir %s'
+require_text "$MANAGER" 'save_client_extra'
+require_text "$MANAGER" 'read_client_extra'
+require_text "$MANAGER" 'client_config_dir=$CCD_DIR'
+require_text "$MANAGER" 'client_to_client=1'
+require_text "$MANAGER" "printf 'client-to-client\\n'"
+require_text "$MANAGER" "printf 'push \"redirect-gateway def1 bypass-dhcp\"\\n'"
 require_text "$MANAGER" 'client_isolation'
 require_text "$MANAGER" 'redirect_gateway'
 require_text "$MANAGER" 'auth-user-pass-verify'
@@ -84,6 +97,8 @@ require_text "$MANAGER" 'data_ciphers_fallback'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_crypt"'
 require_text "$MANAGER" 'delete "openvpn.$OPENVPN_SECTION.tls_auth"'
 require_text "$DEFAULTS" 'grep -Eiq'
+require_text "$FIRMWARE_DEFAULTS" 'mkdir -p /etc/openvpn/ccd'
+require_text "$FIRMWARE_DEFAULTS" 'chmod 0755 /etc/openvpn/ccd'
 require_text "$DEFAULTS" "data_cipher='AES-128-GCM'"
 require_text "$DEFAULTS" "data_cipher='CHACHA20-POLY1305'"
 require_text "$SERVER_MODEL" 'if not pki_ready then'
@@ -116,10 +131,17 @@ require_text "$CLIENT_CHECK" 'openvpn_server.$section.enabled'
 require_text "$CONTROLLER" 'post("server_client_add")'
 require_text "$CONTROLLER" 'post("server_client_download")'
 require_text "$CONTROLLER" 'post("server_client_action")'
+require_text "$CONTROLLER" 'call("server_client_extra")'
+require_text "$CONTROLLER" 'post("server_client_extra_save")'
+require_text "$CONTROLLER" 'save-client-extra'
 require_text "$CONTROLLER" 'name ~= "server"'
 require_text "$ACTIONS_TEMPLATE" '新增用户'
 require_text "$ACTIONS_TEMPLATE" '下载 OVPN'
 require_text "$ACTIONS_TEMPLATE" '删除'
+require_text "$ACTIONS_TEMPLATE" '附加配置'
+require_text "$ACTIONS_TEMPLATE" 'openvpn-server-client-table'
+require_text "$CLIENT_EXTRA_TEMPLATE" 'name="client_extra"'
+require_text "$CLIENT_EXTRA_TEMPLATE" 'value="保存"'
 require_text "$MANAGER" "create_client 'default'"
 require_text "$PACKAGE_DIR/Makefile" 'openvpn-server-client-check'
 require_text "$CONTROLLER" 'if profile:match("^错误：") then'
@@ -133,10 +155,12 @@ require_text "$PACKAGE_DIR/Makefile" 'openvpn_client_custom'
 require_text "$PACKAGE_DIR/Makefile" 'client-list.htm'
 require_text "$PACKAGE_DIR/Makefile" 'client-edit.htm'
 require_text "$PACKAGE_DIR/Makefile" 'server-actions.htm'
+require_text "$PACKAGE_DIR/Makefile" 'server-client-extra.htm'
 require_text "$PACKAGE_DIR/Makefile" 'openvpn-server-auth'
 require_text "$PACKAGE_DIR/Makefile" 'account-list.htm'
 require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/server/'
 require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/client-custom/'
+require_text "$PACKAGE_DIR/files/lib/upgrade/keep.d/openvpn-server-custom" '/etc/openvpn/ccd/'
 require_text "$CONTROLLER" 'post("client_save")'
 require_text "$CONTROLLER" 'post("client_action")'
 require_text "$CONTROLLER" 'CLIENT_CIPHERS'
@@ -188,11 +212,18 @@ if grep -Fq 'jsonfilter -e "@.$field[0].address"' "$MANAGER"; then
 	fail_check '服务器线路 IP 解析仍使用未转义的连字符字段路径。'
 fi
 render_block="$(sed -n '/^render_server_config()/,/^}/p' "$MANAGER")"
-if printf '%s\n' "$render_block" | grep -Fq "        printf 'client-to-client"; then
-	fail_check 'client-to-client 不应在服务端配置生成中无条件保留。'
+if ! printf '%s\n' "$render_block" | grep -Fq 'client_isolation'; then
+	fail_check '服务端配置生成应根据客户端通信隔离选项处理 client-to-client。'
 fi
 if printf '%s' "$render_block" | grep -Eq '^ {8}printf .*redirect-gateway'; then
 	fail_check 'redirect-gateway 不应在服务端配置生成中无条件保留。'
+fi
+export_block="$(sed -n '/^export_client()/,/^}/p' "$MANAGER")"
+if printf '%s\n' "$export_block" | grep -Fq 'client-to-client'; then
+	fail_check '下载 OVPN 不应包含 client-to-client。'
+fi
+if grep -Fq 'mkdir -p "$CCD_DIR"' "$MANAGER" || grep -Fq 'chmod 0755 "$CCD_DIR"' "$MANAGER"; then
+	fail_check 'CCD目录只能由99-custom-firmware创建。'
 fi
 if grep -Eq 'server-export|server_export|导出 Windows 客户端配置' "$CONTROLLER" "$ACTIONS_TEMPLATE"; then
 	fail_check '旧的 Windows 客户端配置导出入口仍存在。'

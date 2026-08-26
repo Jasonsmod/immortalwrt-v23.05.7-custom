@@ -1,0 +1,35 @@
+<%+header%>
+<%
+local dispatcher = require "luci.dispatcher"
+local http = require "luci.http"
+local save_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "server-client-extra-save")
+local settings_url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "settings")
+%>
+<div class="cbi-map">
+	<h2 name="content">客户端附加配置</h2>
+	<% if message and #message > 0 then %>
+	<div class="alert-message notice"><%=pcdata(message)%></div>
+	<% end %>
+	<form method="post" action="<%=pcdata(save_url)%>">
+		<input type="hidden" name="token" value="<%=token%>" />
+		<input type="hidden" name="server_client_name" value="<%=pcdata(name)%>" />
+		<div class="cbi-section">
+			<div class="cbi-value">
+				<label class="cbi-value-title">用户名</label>
+				<div class="cbi-value-field"><strong><%=pcdata(name)%></strong></div>
+			</div>
+			<div class="cbi-value">
+				<label class="cbi-value-title" for="client-extra">附加配置</label>
+				<div class="cbi-value-field">
+					<textarea id="client-extra" name="client_extra" rows="12"
+						style="width: 720px; max-width: 100%; min-height: 260px; font-family: monospace;"><%=pcdata(content or "")%></textarea>
+				</div>
+			</div>
+		</div>
+		<div class="cbi-page-actions">
+			<input class="btn cbi-button cbi-button-apply" type="submit" value="保存" />
+			<a class="btn cbi-button" href="<%=pcdata(settings_url)%>">返回</a>
+		</div>
+	</form>
+</div>
+<%+footer%>
