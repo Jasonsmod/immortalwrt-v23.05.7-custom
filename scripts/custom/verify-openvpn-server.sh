@@ -107,6 +107,7 @@ require_text "$SERVER_MODEL" 'DynamicList'
 require_text "$SERVER_MODEL" 'auth_mode'
 require_text "$SERVER_MODEL" 'tunnel_type'
 require_text "$SERVER_MODEL" 'extra_config'
+require_text "$SERVER_MODEL" 'actions.remote_host_error'
 require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "account")'
 require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "both")'
 require_text "$SERVER_MODEL" 'client_isolation.default = "0"'
@@ -131,6 +132,9 @@ require_text "$CLIENT_CHECK" 'openvpn_server.$section.enabled'
 require_text "$CONTROLLER" 'post("server_client_add")'
 require_text "$CONTROLLER" 'post("server_client_download")'
 require_text "$CONTROLLER" 'post("server_client_action")'
+require_text "$CONTROLLER" 'server_interface_has_address'
+require_text "$CONTROLLER" 'remote_host_error=1'
+require_text "$CONTROLLER" '请选择有效的线路或输入自定义 DDNS 地址。'
 require_text "$CONTROLLER" 'call("server_client_extra")'
 require_text "$CONTROLLER" 'post("server_client_extra_save")'
 require_text "$CONTROLLER" 'save-client-extra'
@@ -141,6 +145,12 @@ require_text "$ACTIONS_TEMPLATE" '删除'
 require_text "$ACTIONS_TEMPLATE" '附加配置'
 require_text "$ACTIONS_TEMPLATE" '独立附加配置'
 require_text "$ACTIONS_TEMPLATE" 'openvpn-server-client-table'
+require_text "$ACTIONS_TEMPLATE" '独立附加配置'
+require_text "$ACTIONS_TEMPLATE" 'validateServerClientAdd'
+require_text "$ACTIONS_TEMPLATE" 'data-generating'
+require_text "$ACTIONS_TEMPLATE" '生成中...'
+require_text "$ACTIONS_TEMPLATE" 'openvpn-server-init-action'
+require_text "$ACTIONS_TEMPLATE" 'openvpn-remote-host-error'
 require_text "$CLIENT_EXTRA_TEMPLATE" 'name="client_extra"'
 require_text "$CLIENT_EXTRA_TEMPLATE" 'value="保存"'
 require_text "$MANAGER" "create_client 'default'"
@@ -250,6 +260,13 @@ require_text "$DEFAULTS" "main.lzo=1"
 require_text "$DEFAULTS" "main.client_isolation=0"
 require_text "$DEFAULTS" "main.redirect_gateway=0"
 
+if ! awk '
+/^extra_config = s:option/ { extra = NR }
+/^actions = s:option/ && extra > 0 && NR > extra { found = 1 }
+END { exit found ? 0 : 1 }
+' "$SERVER_MODEL"; then
+	fail_check '用户管理区必须位于服务端附加配置之后。'
+fi
 if grep -Fq 'clients.lua' "$PACKAGE_DIR/Makefile"; then
 	fail_check '旧客户端证书页面不应继续安装。'
 fi

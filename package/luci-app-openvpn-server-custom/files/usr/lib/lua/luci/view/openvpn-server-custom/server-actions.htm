@@ -15,13 +15,29 @@ local cbid = self:cbid(section)
 	width: 720px;
 	max-width: 100%;
 }
+.openvpn-server-client-panel .cbi-value {
+	display: flex;
+	align-items: center;
+}
+.openvpn-server-client-panel .cbi-value-title {
+	box-sizing: border-box;
+	width: 160px;
+	flex: 0 0 160px;
+	text-align: left;
+}
 .openvpn-server-client-panel .cbi-value-field {
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	flex: 1 1 auto;
+	min-width: 0;
 }
 .openvpn-server-client-panel .cbi-value-field input[type="text"] {
 	width: 220px;
+}
+.openvpn-server-init-action {
+	margin-top: 12px;
+	text-align: center;
 }
 .openvpn-server-client-table {
 	width: 100%;
@@ -40,6 +56,7 @@ local cbid = self:cbid(section)
 }
 .openvpn-server-client-table th:first-child,
 .openvpn-server-client-table td:first-child {
+	padding-left: 0;
 	text-align: left;
 }
 .openvpn-server-client-table th {
@@ -62,34 +79,42 @@ local cbid = self:cbid(section)
 .openvpn-server-client-table .client-actions .btn {
 	min-width: 58px;
 }
+.openvpn-remote-host-error {
+	border: 2px solid #d33 !important;
+	box-shadow: 0 0 0 2px rgba(221, 51, 51, .18);
+}
 </style>
 <input id="server-client-name" type="hidden" name="server_client_name" value="" />
 <input id="server-client-action" type="hidden" name="server_client_action" value="" />
-<% if not self.pki_ready then %>
-<input type="submit"
-	id="<%=cbid%>"
-	name="<%=cbid%>"
-	value="<%=pcdata(self.inputtitle)%>"
-	class="btn cbi-button cbi-button-apply" />
-<% else %>
 <div class="openvpn-server-client-panel">
 	<div class="cbi-value">
 		<label class="cbi-value-title" for="server-client-new-name">用户名</label>
 		<div class="cbi-value-field">
 			<input id="server-client-new-name" type="text" maxlength="32" />
-			<input type="submit" class="btn cbi-button cbi-button-add" value="新增用户"
+			<input id="server-client-add-button" type="submit" class="btn cbi-button cbi-button-add"
+				value="新增用户"
+				<% if not self.pki_ready then %>disabled="disabled"<% else %>
 				formaction="<%=pcdata(add_url)%>" formmethod="post"
-				onclick="var input=document.getElementById('server-client-new-name'); var name=input.value.trim(); if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){alert('用户名格式无效');return false;} document.getElementById('server-client-name').value=name;" />
+				onclick="return validateServerClientAdd(this);"<% end %> />
 		</div>
 	</div>
+	<% if not self.pki_ready then %>
+	<div class="openvpn-server-init-action">
+		<input type="submit"
+			id="<%=cbid%>"
+			name="<%=cbid%>"
+			value="<%=pcdata(self.inputtitle)%>"
+			class="btn cbi-button cbi-button-apply" />
+	</div>
+	<% else %>
 	<div class="table cbi-section-table">
 		<table class="table openvpn-server-client-table" cellspacing="0" cellpadding="0" border="0">
 			<colgroup>
-				<col style="width: 22%;" />
-				<col style="width: 14%;" />
-				<col style="width: 20%;" />
-				<col style="width: 20%;" />
-				<col style="width: 24%;" />
+				<col style="width: 160px;" />
+				<col style="width: 100px;" />
+				<col style="width: 140px;" />
+				<col style="width: 140px;" />
+				<col style="width: 180px;" />
 			</colgroup>
 			<thead>
 				<tr>
@@ -135,6 +160,70 @@ local cbid = self:cbid(section)
 			</tbody>
 		</table>
 	</div>
+	<% end %>
 </div>
-<% end %>
+<script type="text/javascript">
+function openvpnServerField(name) {
+	return document.getElementById('widget.cbid.openvpn_server.main.' + name) ||
+		document.querySelector('[name="cbid.openvpn_server.main.' + name + '"]') ||
+		document.getElementById(name);
+}
+
+function openvpnServerLineHasIp() {
+	var bind = openvpnServerField('bind_interface');
+	if (!bind || !bind.options || bind.selectedIndex < 0)
+		return false;
+	var option = bind.options[bind.selectedIndex];
+	var text = option.textContent || option.innerText || '';
+	return /[（(]\s*[^）)]{1,}\s*[）)]/.test(text);
+}
+
+function validateServerClientAdd(button) {
+	if (button.getAttribute('data-generating') === '1')
+		return false;
+
+	var nameInput = document.getElementById('server-client-new-name');
+	var name = nameInput ? nameInput.value.trim() : '';
+	if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) {
+		alert('用户名格式无效');
+		if (nameInput)
+			nameInput.focus();
+		return false;
+	}
+
+	var remote = openvpnServerField('remote_host');
+	var remoteValue = remote && remote.value ? remote.value.trim() : '';
+	if (!remoteValue && !openvpnServerLineHasIp()) {
+		if (remote) {
+			remote.classList.add('openvpn-remote-host-error');
+			remote.focus();
+		}
+		alert('请选择有效的线路或输入自定义 DDNS 地址。');
+		if (remote)
+			remote.focus();
+		return false;
+	}
+
+	document.getElementById('server-client-name').value = name;
+	button.setAttribute('data-generating', '1');
+	button.disabled = true;
+	button.value = '生成中...';
+	return true;
+}
+
+(function() {
+	var remote = openvpnServerField('remote_host');
+	if (remote) {
+		remote.addEventListener('input', function() {
+			this.classList.remove('openvpn-remote-host-error');
+		});
+		<% if self.remote_host_error then %>
+		remote.classList.add('openvpn-remote-host-error');
+		setTimeout(function() {
+			remote.focus();
+		}, 0);
+		<% end %>
+	}
+})();
+</script>
 <%+cbi/valuefooter%>

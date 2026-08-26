@@ -371,20 +371,44 @@ function client_import()
 	end
 end
 
-local function redirect_server_settings(message)
+local function redirect_server_settings(message, remote_host_error)
     local dispatcher = require "luci.dispatcher"
     local http = require "luci.http"
     local url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "settings")
     if message and #message > 0 then
         url = url .. "?message=" .. http.urlencode(message)
     end
+    if remote_host_error then
+        url = url .. (url:find("?", 1, true) and "&" or "?") .. "remote_host_error=1"
+    end
     http.redirect(url)
 end
-
 local function valid_server_client_name(name)
     return type(name) == "string" and name ~= "server" and name:match("^[A-Za-z0-9_-]+$") ~= nil and #name <= 32
 end
 
+local function server_interface_has_address(interface)
+    local jsonc = require "luci.jsonc"
+    local field
+    local allowed = {
+        lan = true,
+        vpn0 = true,
+        wan = true,
+        wan6 = true,
+        wg0 = true
+    }
+    if not allowed[interface] then
+        return false
+    end
+    field = interface == "wan6" and "ipv6-address" or "ipv4-address"
+    local output = require("luci.sys").exec("ubus call network.interface." ..
+        interface .. " status 2>/dev/null") or ""
+    local ok, status = pcall(jsonc.parse, output)
+    local addresses = ok and type(status) == "table" and status[field]
+    local address = type(addresses) == "table" and addresses[1]
+    return type(address) == "table" and type(address.address) == "string" and
+        address.address ~= ""
+end
 function server_client_add()
     local dispatcher = require "luci.dispatcher"
     local http = require "luci.http"
@@ -392,11 +416,17 @@ function server_client_add()
     local fs = require "nixio.fs"
     local util = require "luci.util"
     local name = http.formvalue("server_client_name") or ""
+    local bind_interface = http.formvalue("cbid.openvpn_server.main.bind_interface") or http.formvalue("bind_interface") or "wan"
+    local remote_host = http.formvalue("cbid.openvpn_server.main.remote_host") or http.formvalue("remote_host") or ""
     if not dispatcher.test_post_security() then
         return
     end
     if not valid_server_client_name(name) then
         redirect_server_settings("错误：客户端用户名只能包含字母、数字、下划线和连字符，最长32个字符。")
+        return
+    end
+    if not remote_host:match("%S") and not server_interface_has_address(bind_interface) then
+        redirect_server_settings("错误：请选择有效的线路或输入自定义 DDNS 地址。", true)
         return
     end
     if not fs.access("/etc/easy-rsa/pki/ca.crt") then

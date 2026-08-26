@@ -200,6 +200,7 @@ actions.template = "openvpn-server-custom/server-actions"
 actions.pki_ready = pki_ready
 actions.inputtitle = "初始化 CA 和服务器证书"
 actions.client_users = client_users
+actions.remote_host_error = http.formvalue("remote_host_error") == "1"
 function actions.write()
 	if not pki_ready then
 		m.message = sys.exec(manager .. " init-pki 2>&1")
