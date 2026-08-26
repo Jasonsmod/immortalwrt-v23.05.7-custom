@@ -75,6 +75,8 @@ require_text "$MANAGER" 'AES-128-GCM'
 require_text "$MANAGER" 'set_openvpn_default'
 require_text "$MANAGER" 'replace_managed_push'
 require_text "$MANAGER" 'render_server_config'
+require_text "$MANAGER" 'client_isolation'
+require_text "$MANAGER" 'redirect_gateway'
 require_text "$MANAGER" 'auth-user-pass-verify'
 require_text "$MANAGER" 'save_account'
 require_text "$AUTH_SCRIPT" 'server-accounts'
@@ -92,6 +94,8 @@ require_text "$SERVER_MODEL" 'tunnel_type'
 require_text "$SERVER_MODEL" 'extra_config'
 require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "account")'
 require_text "$SERVER_MODEL" 'accounts:depends("auth_mode", "both")'
+require_text "$SERVER_MODEL" 'client_isolation.default = "0"'
+require_text "$SERVER_MODEL" 'redirect_gateway.default = "0"'
 require_text "$SERVER_MODEL" 'lzo.default = "1"'
 require_text "$SERVER_MODEL" 'cpu_supports_aes'
 require_text "$SERVER_MODEL" 'data_cipher.default = selected_cipher'
@@ -183,6 +187,13 @@ fi
 if grep -Fq 'jsonfilter -e "@.$field[0].address"' "$MANAGER"; then
 	fail_check '服务器线路 IP 解析仍使用未转义的连字符字段路径。'
 fi
+render_block="$(sed -n '/^render_server_config()/,/^}/p' "$MANAGER")"
+if printf '%s\n' "$render_block" | grep -Fq "        printf 'client-to-client"; then
+	fail_check 'client-to-client 不应在服务端配置生成中无条件保留。'
+fi
+if printf '%s' "$render_block" | grep -Eq '^ {8}printf .*redirect-gateway'; then
+	fail_check 'redirect-gateway 不应在服务端配置生成中无条件保留。'
+fi
 if grep -Eq 'server-export|server_export|导出 Windows 客户端配置' "$CONTROLLER" "$ACTIONS_TEMPLATE"; then
 	fail_check '旧的 Windows 客户端配置导出入口仍存在。'
 fi
@@ -201,7 +212,11 @@ if grep -Eq 'DES-|RC2-|SEED-|CAST5-|CFB1|CFB8|certificate_status|auth_mode\.desc
 	fail_check '服务端设置页仍包含已移除的算法或冗余提示。'
 fi
 require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option lzo '1'"
+require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option client_isolation '0'"
+require_text "$PACKAGE_DIR/files/etc/config/openvpn_server" "option redirect_gateway '0'"
 require_text "$DEFAULTS" "main.lzo=1"
+require_text "$DEFAULTS" "main.client_isolation=0"
+require_text "$DEFAULTS" "main.redirect_gateway=0"
 
 if grep -Fq 'clients.lua' "$PACKAGE_DIR/Makefile"; then
 	fail_check '旧客户端证书页面不应继续安装。'

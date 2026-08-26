@@ -130,6 +130,12 @@ tunnel_type.rmempty = false
 topology = s:option(DummyValue, "_topology", "拓扑类型")
 topology.default = "SUBNET"
 
+client_isolation = s:option(Flag, "client_isolation", "客户端通信隔离")
+client_isolation.default = "0"
+client_isolation.rmempty = false
+redirect_gateway = s:option(Flag, "redirect_gateway", "客户端所有流量走远程网关")
+redirect_gateway.default = "0"
+redirect_gateway.rmempty = false
 lzo = s:option(Flag, "lzo", "LZO压缩")
 lzo.default = "1"
 lzo.rmempty = false

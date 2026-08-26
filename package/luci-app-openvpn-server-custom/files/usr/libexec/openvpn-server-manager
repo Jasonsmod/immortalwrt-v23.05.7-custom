@@ -133,6 +133,15 @@ replace_managed_push() {
 	uci -q set "openvpn_server.main.$marker=$value"
 }
 
+remove_managed_push() {
+    local marker="$1"
+    local previous
+
+    previous="$(uci -q get "openvpn_server.main.$marker" || true)"
+    [ -z "$previous" ] ||
+        uci -q del_list "openvpn.$OPENVPN_SECTION.push=$previous" >/dev/null 2>&1 || true
+    uci -q delete "openvpn_server.main.$marker"
+}
 valid_client_name() {
 	case "$1" in
 		''|*[!A-Za-z0-9_-]*|?????????????????????????????????*) return 1 ;;
@@ -397,7 +406,7 @@ render_server_config() {
     local proto="$1" port="$2" tunnel_type="$3" tunnel_device="$4"
     local vpn_network="$5" vpn_netmask="$6" max_clients="$7"
     local lan_network="$8" lan_netmask="$9" client_dns="${10}"
-    local data_cipher="${11}" lzo="${12}" auth_mode="${13}" extra_config="${14}"
+    local data_cipher="${11}" lzo="${12}" auth_mode="${13}" client_isolation="${14}" redirect_gateway="${15}" extra_config="${16}"
     local route route_network prefix route_netmask config_tmp
 
     config_tmp="$OPENVPN_CONFIG.tmp.$$"
@@ -419,7 +428,8 @@ render_server_config() {
         printf 'keepalive 10 120\n'
         printf 'persist-key\n'
         printf 'persist-tun\n'
-        printf 'client-to-client\n'
+        [ "$client_isolation" = '0' ] && printf 'client-to-client\n'
+        [ "$redirect_gateway" = '1' ] && printf 'push "redirect-gateway def1 bypass-dhcp"\n'
         printf 'user nobody\n'
         printf 'group nogroup\n'
         printf 'status /var/run/openvpn-server.status\n'
@@ -441,7 +451,6 @@ render_server_config() {
         [ "$auth_mode" = 'account' ] && printf 'verify-client-cert none\n'
         printf 'push "route %s %s"\n' "$lan_network" "$lan_netmask"
         printf 'push "dhcp-option DNS %s"\n' "$client_dns"
-        printf 'push "redirect-gateway def1 bypass-dhcp"\n'
         while IFS= read -r route || [ -n "$route" ]; do
             [ -z "$route" ] && continue
             route_network="${route%%/*}"
@@ -462,7 +471,7 @@ EOF_ROUTES
 apply_configuration() {
     local enabled proto port remote_host bind_interface vpn_network vpn_netmask
     local lan_network lan_netmask client_dns max_clients openvpn_enabled data_cipher
-    local auth_mode tunnel_type tunnel_device lzo extra_config route
+    local auth_mode tunnel_type tunnel_device lzo client_isolation redirect_gateway extra_config route
 
     enabled="$(uci -q get openvpn_server.main.enabled || printf '0')"
     proto="$(uci -q get openvpn_server.main.proto || printf 'udp')"
@@ -478,6 +487,8 @@ apply_configuration() {
     auth_mode="$(uci -q get openvpn_server.main.auth_mode || printf 'cert')"
     tunnel_type="$(uci -q get openvpn_server.main.tunnel_type || printf 'tun')"
     lzo="$(uci -q get openvpn_server.main.lzo || printf '0')"
+    client_isolation="$(uci -q get openvpn_server.main.client_isolation || printf '0')"
+    redirect_gateway="$(uci -q get openvpn_server.main.redirect_gateway || printf '0')"
     extra_config="$(uci -q get openvpn_server.main.extra_config || true)"
     data_cipher=''
     if uci -q get openvpn_server.main.data_cipher >/dev/null 2>&1; then
@@ -489,6 +500,8 @@ apply_configuration() {
     valid_auth_mode "$auth_mode" || fail '认证方式无效。'
     valid_tunnel_type "$tunnel_type" || fail '隧道类型只能是 TUN 或 TAP。'
     valid_boolean "$lzo" || fail 'LZO 开关值无效。'
+    valid_boolean "$client_isolation" || fail '客户端通信隔离开关值无效。'
+    valid_boolean "$redirect_gateway" || fail '客户端所有流量走远程网关开关值无效。'
     valid_uint "$port" && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail '端口必须在 1 到 65535 之间。'
     valid_remote_interface "$bind_interface" || fail '线路配置无效。'
     [ -z "$remote_host" ] || valid_remote_host "$remote_host" || fail '自定义 DDNS 地址格式无效。'
@@ -551,7 +564,11 @@ set_openvpn_default auth 'SHA256'
 set_openvpn_default keepalive '10 120'
 set_openvpn_default persist_key '1'
 set_openvpn_default persist_tun '1'
-set_openvpn_default client_to_client '1'
+if [ "$client_isolation" = '0' ]; then
+    uci -q set "openvpn.$OPENVPN_SECTION.client_to_client=1"
+else
+    uci -q delete "openvpn.$OPENVPN_SECTION.client_to_client"
+fi
 set_openvpn_default user 'nobody'
 set_openvpn_default group 'nogroup'
 set_openvpn_default status '/var/run/openvpn-server.status'
@@ -569,10 +586,14 @@ set_openvpn_default verb '3'
 
 replace_managed_push managed_push_route "route $lan_network $lan_netmask"
 replace_managed_push managed_push_dns "dhcp-option DNS $client_dns"
-replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
+if [ "$redirect_gateway" = '1' ]; then
+    replace_managed_push managed_push_gateway 'redirect-gateway def1 bypass-dhcp'
+else
+    remove_managed_push managed_push_gateway
+fi
 
 render_server_config "$proto" "$port" "$tunnel_type" "$tunnel_device" "$vpn_network" "$vpn_netmask" "$max_clients" \
-    "$lan_network" "$lan_netmask" "$client_dns" "$data_cipher" "$lzo" "$auth_mode" "$extra_config"
+    "$lan_network" "$lan_netmask" "$client_dns" "$data_cipher" "$lzo" "$auth_mode" "$client_isolation" "$redirect_gateway" "$extra_config"
 
 uci -q commit openvpn
 uci -q commit openvpn_server
