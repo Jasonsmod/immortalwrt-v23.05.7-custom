@@ -71,20 +71,6 @@ m.description = string.format("当前状态：%s；证书状态：%s。",
 s = m:section(NamedSection, "main", "settings", "服务器设置")
 s.addremove = false
 
-actions = s:option(Button, "_init_pki", "")
-actions.template = "openvpn-server-custom/server-actions"
-actions.pki_ready = pki_ready
-actions.inputtitle = "初始化 CA 和服务器证书"
-actions.client_users = client_users
-function actions.write()
-	if not pki_ready then
-		m.message = sys.exec(manager .. " init-pki 2>&1")
-		actions.pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
-			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
-			fs.access("/etc/easy-rsa/pki/private/server.key")
-		actions.client_users = actions.pki_ready and load_client_users() or {}
-	end
-end
 enabled = s:option(Flag, "enabled", "启用 OpenVPN 服务")
 enabled.rmempty = false
 
@@ -208,6 +194,21 @@ max_clients.rmempty = false
 extra_config = s:option(TextValue, "extra_config", "附加配置")
 extra_config.rows = 8
 extra_config.rmempty = true
+
+actions = s:option(Button, "_init_pki", "")
+actions.template = "openvpn-server-custom/server-actions"
+actions.pki_ready = pki_ready
+actions.inputtitle = "初始化 CA 和服务器证书"
+actions.client_users = client_users
+function actions.write()
+	if not pki_ready then
+		m.message = sys.exec(manager .. " init-pki 2>&1")
+		actions.pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
+			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
+			fs.access("/etc/easy-rsa/pki/private/server.key")
+		actions.client_users = actions.pki_ready and load_client_users() or {}
+	end
+end
 
 function m.on_after_commit()
     m.message = sys.exec(manager .. " apply 2>&1")
