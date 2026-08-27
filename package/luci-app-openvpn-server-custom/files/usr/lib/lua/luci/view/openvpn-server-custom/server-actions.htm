@@ -9,13 +9,14 @@ local cbid = self:cbid(section)
 %>
 <style>
 .openvpn-server-client-panel {
-	width: 100%;
-	max-width: 100%;
+	width: calc(100% + 15rem);
+	max-width: none;
+	margin-left: -15rem;
 }
 .openvpn-server-client-panel .cbi-section-table {
-	width: 60%;
+	width: calc(100% - 15rem);
 	max-width: 100%;
-	margin-left: 40%;
+	margin-left: 15rem;
 	box-sizing: border-box;
 }
 .openvpn-server-client-panel .cbi-value {
@@ -26,10 +27,10 @@ local cbid = self:cbid(section)
 .openvpn-server-client-panel .cbi-value-title {
 	box-sizing: border-box;
 	float: none;
-	width: 40%;
-	flex: 0 0 40%;
+	width: 15rem;
+	flex: 0 0 15rem;
 	text-align: right;
-	padding-right: 24px;
+	padding-right: 0.6rem;
 }
 .openvpn-server-client-panel .cbi-value-field {
 	display: flex;

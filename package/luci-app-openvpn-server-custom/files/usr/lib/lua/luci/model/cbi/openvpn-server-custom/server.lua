@@ -61,6 +61,17 @@ local function load_client_users()
     return users
 end
 
+local function final_command_result(output)
+    local result = ""
+    for line in (output or ""):gmatch("[^\r\n]+") do
+        line = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if #line > 0 then
+            result = line
+        end
+    end
+    return result
+end
+
 local client_users = pki_ready and load_client_users() or {}
 m = Map("openvpn_server", "OpenVPN 服务器",
 	"独立管理 OpenVPN 服务器和证书。服务器只有在 PKI 初始化完成后才会启动。")
@@ -203,7 +214,7 @@ actions.client_users = client_users
 actions.remote_host_error = http.formvalue("remote_host_error") == "1"
 function actions.write()
 	if not pki_ready then
-		m.message = sys.exec(manager .. " init-pki 2>&1")
+		m.message = final_command_result(sys.exec(manager .. " init-pki 2>&1"))
 		pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
 			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
 			fs.access("/etc/easy-rsa/pki/private/server.key")
@@ -216,7 +227,7 @@ function actions.write()
 end
 
 function m.on_after_commit()
-    m.message = sys.exec(manager .. " apply 2>&1")
+    m.message = final_command_result(sys.exec(manager .. " apply 2>&1"))
 end
 
 if http.formvalue("message") then

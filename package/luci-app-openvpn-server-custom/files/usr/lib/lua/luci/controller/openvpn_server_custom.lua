@@ -371,10 +371,22 @@ function client_import()
 	end
 end
 
+local function final_command_result(output)
+    local result = ""
+    for line in (output or ""):gmatch("[^\r\n]+") do
+        line = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if #line > 0 then
+            result = line
+        end
+    end
+    return result
+end
+
 local function redirect_server_settings(message, remote_host_error)
     local dispatcher = require "luci.dispatcher"
     local http = require "luci.http"
     local url = dispatcher.build_url("admin", "vpn", "openvpn-server-custom", "settings")
+    message = final_command_result(message)
     if message and #message > 0 then
         url = url .. "?message=" .. http.urlencode(message)
     end
