@@ -23,6 +23,7 @@ local cbid = self:cbid(section)
 	display: flex;
 	align-items: center;
 	width: 100%;
+	padding: 0;
 }
 .openvpn-server-client-panel .cbi-value-title {
 	box-sizing: border-box;
@@ -116,7 +117,7 @@ local cbid = self:cbid(section)
 			id="<%=cbid%>"
 			name="<%=cbid%>"
 			value="<%=pcdata(self.inputtitle)%>"
-			class="btn cbi-button cbi-button-apply" />
+			class="btn cbi-button cbi-button-apply" onclick="return startOpenvpnServerInit(this);" />
 	</div>
 	<% else %>
 	<div class="table cbi-section-table">
@@ -188,6 +189,18 @@ function openvpnServerLineHasIp() {
 	var option = bind.options[bind.selectedIndex];
 	var text = option.textContent || option.innerText || '';
 	return /[（(]\s*[^）)]{1,}\s*[）)]/.test(text);
+}
+
+function startOpenvpnServerInit(button) {
+	if (button.getAttribute('data-initializing') === '1')
+		return false;
+
+	button.setAttribute('data-initializing', '1');
+	button.value = '初始化中...';
+	setTimeout(function() {
+		button.disabled = true;
+	}, 0);
+	return true;
 }
 
 function validateServerClientAdd(button) {
