@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autocore
 PKG_FLAGS:=nonshared
-PKG_RELEASE:=42
+PKG_RELEASE:=43
 
 PKG_CONFIG_DEPENDS:= \
 	CONFIG_TARGET_bcm27xx \
@@ -40,9 +40,6 @@ endif
 
 	$(INSTALL_DIR) $(1)/sbin
 	$(INSTALL_BIN) ./files/cpuinfo $(1)/sbin/
-ifneq ($(filter ipq40xx%, $(TARGETID)),)
-	$(INSTALL_BIN) ./files/tempinfo $(1)/sbin/
-endif
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(CP) ./files/luci-mod-status-autocore.json $(1)/usr/share/rpcd/acl.d/

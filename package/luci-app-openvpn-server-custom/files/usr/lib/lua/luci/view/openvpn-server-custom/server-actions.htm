@@ -10,14 +10,16 @@ local cbid = self:cbid(section)
 <style>
 .openvpn-server-client-panel {
 	width: calc(100% + 15rem);
-	max-width: none;
+	max-width: 1630px;
 	margin-left: -15rem;
+	box-sizing: border-box;
 }
 .openvpn-server-client-panel .cbi-section-table {
 	width: calc(100% - 15rem);
 	max-width: 100%;
 	margin-left: 15rem;
 	box-sizing: border-box;
+	overflow-x: auto;
 }
 .openvpn-server-client-panel .cbi-value {
 	display: flex;
@@ -56,6 +58,7 @@ local cbid = self:cbid(section)
 .openvpn-server-client-table {
 	width: 100%;
 	max-width: 100%;
+	min-width: 720px;
 	table-layout: fixed;
 	border-collapse: collapse;
 	font-size: 14px;
@@ -96,6 +99,26 @@ local cbid = self:cbid(section)
 .openvpn-remote-host-error {
 	border: 2px solid #d33 !important;
 	box-shadow: 0 0 0 2px rgba(221, 51, 51, .18);
+}
+@media (max-width: 768px) {
+	.openvpn-server-client-panel {
+		width: 100%;
+		margin-left: 0;
+	}
+	.openvpn-server-client-panel .cbi-value {
+		align-items: stretch;
+		flex-direction: column;
+	}
+	.openvpn-server-client-panel .cbi-value-title {
+		width: 100%;
+		flex-basis: auto;
+		padding-right: 0;
+		text-align: left;
+	}
+	.openvpn-server-client-panel .cbi-section-table {
+		width: 100%;
+		margin-left: 0;
+	}
 }
 </style>
 <input id="server-client-name" type="hidden" name="server_client_name" value="" />

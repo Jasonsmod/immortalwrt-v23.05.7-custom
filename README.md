@@ -118,6 +118,8 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
 
 ## 变更记录 ✅ 已完成
 
+[2026-09-05] 类型：修复 | 模块：OpenVPN 服务器与状态页 | 内容：将服务器用户管理区最大宽度限制为 1630px，统一表单对齐并修复窄屏表格溢出；取消状态页温度栏显示。
+
 [2026-08-24] 类型：修复 | 模块：OpenVPN 客户端配置导入 | 内容：修复 OpenVPN 2.5.8 LZO 编译能力误判，并将导入按钮改为“导入ovpn文件”。
 
 ## Acknowledgements
@@ -128,5 +130,4 @@ ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-o
     <td><a href="https://sourceforge.net/"><img src="https://sourceforge.net/sflogo.php?type=17&group_id=3663829" alt="SourceForge" width=200></a></td>
   </tr>
 </table>
-
 
