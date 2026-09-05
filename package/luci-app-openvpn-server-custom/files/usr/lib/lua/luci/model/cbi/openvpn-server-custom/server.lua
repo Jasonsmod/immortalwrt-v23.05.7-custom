@@ -206,6 +206,10 @@ extra_config = s:option(TextValue, "extra_config", "附加配置")
 extra_config.rows = 8
 extra_config.rmempty = true
 
+client_add = s:option(DummyValue, "_client_add", "用户名")
+client_add.template = "openvpn-server-custom/server-client-add"
+client_add.pki_ready = pki_ready
+
 actions = s:option(Button, "_init_pki", "")
 actions.template = "openvpn-server-custom/server-actions"
 actions.pki_ready = pki_ready
@@ -218,6 +222,7 @@ function actions.write()
 		pki_ready = fs.access("/etc/easy-rsa/pki/ca.crt") and
 			fs.access("/etc/easy-rsa/pki/issued/server.crt") and
 			fs.access("/etc/easy-rsa/pki/private/server.key")
+		client_add.pki_ready = pki_ready
 		actions.pki_ready = pki_ready
 		actions.client_users = actions.pki_ready and load_client_users() or {}
 		m.description = string.format("当前状态：%s；证书状态：%s。",

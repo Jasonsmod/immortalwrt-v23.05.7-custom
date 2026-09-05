@@ -1,0 +1,33 @@
+<style>
+.openvpn-server-client-add {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+}
+.openvpn-server-client-add input[type="text"] {
+	width: 20em;
+	max-width: 100%;
+	box-sizing: border-box;
+}
+@media (max-width: 768px) {
+	.openvpn-server-client-add {
+		align-items: stretch;
+		flex-direction: column;
+	}
+}
+</style>
+<div class="cbi-value cbi-value-last" id="cbi-openvpn_server-<%=section%>-_client_add"
+	data-index="<%=self.index%>" data-depends="<%=pcdata(self:deplist2json(section))%>">
+	<label class="cbi-value-title" for="server-client-new-name"><%=self.title%></label>
+	<div class="cbi-value-field">
+		<div class="openvpn-server-client-add">
+			<input id="server-client-new-name" name="server-client-new-name" type="text"
+				maxlength="32" autocomplete="username" />
+			<input id="server-client-add-button" type="button" class="btn cbi-button cbi-button-add"
+				value="新增用户"
+				<% if not self.pki_ready then %>disabled="disabled"<% else %>
+				onclick="return validateServerClientAdd(this);"<% end %> />
+		</div>
+	</div>
+</div>

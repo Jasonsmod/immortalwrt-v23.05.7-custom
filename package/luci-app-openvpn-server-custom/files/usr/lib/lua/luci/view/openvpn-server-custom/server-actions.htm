@@ -9,44 +9,15 @@ local cbid = self:cbid(section)
 %>
 <style>
 .openvpn-server-client-panel {
-	width: calc(100% + 15rem);
+	width: 100%;
 	max-width: 1630px;
-	margin-left: -15rem;
 	box-sizing: border-box;
 }
 .openvpn-server-client-panel .cbi-section-table {
-	width: calc(100% - 15rem);
+	width: 100%;
 	max-width: 100%;
-	margin-left: 15rem;
 	box-sizing: border-box;
 	overflow-x: auto;
-}
-.openvpn-server-client-panel .cbi-value {
-	display: flex;
-	align-items: center;
-	width: 100%;
-	padding: 0;
-}
-.openvpn-server-client-panel .cbi-value-title {
-	box-sizing: border-box;
-	float: none;
-	width: 15rem;
-	flex: 0 0 15rem;
-	text-align: right;
-	padding-right: 0.6rem;
-}
-.openvpn-server-client-panel .cbi-value-field {
-	display: flex;
-	align-items: center;
-	margin-left: 0;
-	gap: 8px;
-	flex: 1 1 auto;
-	min-width: 0;
-}
-.openvpn-server-client-panel .cbi-value-field input[type="text"] {
-	width: 20em;
-	max-width: 100%;
-	box-sizing: border-box;
 }
 .openvpn-server-init-action {
 	margin-top: 12px;
@@ -100,40 +71,10 @@ local cbid = self:cbid(section)
 	border: 2px solid #d33 !important;
 	box-shadow: 0 0 0 2px rgba(221, 51, 51, .18);
 }
-@media (max-width: 768px) {
-	.openvpn-server-client-panel {
-		width: 100%;
-		margin-left: 0;
-	}
-	.openvpn-server-client-panel .cbi-value {
-		align-items: stretch;
-		flex-direction: column;
-	}
-	.openvpn-server-client-panel .cbi-value-title {
-		width: 100%;
-		flex-basis: auto;
-		padding-right: 0;
-		text-align: left;
-	}
-	.openvpn-server-client-panel .cbi-section-table {
-		width: 100%;
-		margin-left: 0;
-	}
-}
 </style>
 <input id="server-client-name" type="hidden" name="server_client_name" value="" />
 <input id="server-client-action" type="hidden" name="server_client_action" value="" />
 <div class="openvpn-server-client-panel">
-	<div class="cbi-value">
-		<label class="cbi-value-title" for="server-client-new-name">用户名</label>
-		<div class="cbi-value-field">
-			<input id="server-client-new-name" type="text" maxlength="32" />
-			<input id="server-client-add-button" type="button" class="btn cbi-button cbi-button-add"
-				value="新增用户"
-				<% if not self.pki_ready then %>disabled="disabled"<% else %>
-				onclick="return validateServerClientAdd(this);"<% end %> />
-		</div>
-	</div>
 	<% if not self.pki_ready then %>
 	<div class="openvpn-server-init-action">
 		<input type="submit"
@@ -272,7 +213,30 @@ function validateServerClientAdd(button) {
 	return false;
 }
 
+function repairOpenvpnServerLabels() {
+	var labels = document.querySelectorAll('.cbi-map label[for]');
+	for (var i = 0; i < labels.length; i++) {
+		var targetName = labels[i].getAttribute('for');
+		if (!targetName || document.getElementById(targetName))
+			continue;
+
+		var fields = document.getElementsByName(targetName);
+		for (var j = 0; j < fields.length; j++) {
+			if (fields[j].id) {
+				labels[i].setAttribute('for', fields[j].id);
+				break;
+			}
+		}
+	}
+}
+
 (function() {
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', repairOpenvpnServerLabels);
+	} else {
+		repairOpenvpnServerLabels();
+	}
+
 	var remote = openvpnServerField('remote_host');
 	if (remote) {
 		remote.addEventListener('input', function() {
